@@ -2335,17 +2335,17 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
 				
 				for(iptr = 0; lineBuffer[iptr] != '<' && lineBuffer[iptr] != '"'; iptr++);
 				if(lineBuffer[iptr] == '<'){
-                    
+                    fileNamebuf[0] = 0;
                     strcat(fileNamebuf, BLANG_INCLUDE_PATH);
                     fnb = strlen(fileNamebuf);
                     fileNamebuf[fnb++] = '/';
                     
-					for(iptr++; lineBuffer[iptr] != '>'; iptr++){
-						fileNamebuf[fnb++] = lineBuffer[iptr];
-					}
+                    for(iptr++; lineBuffer[iptr] != '>'; iptr++){
+                        fileNamebuf[fnb++] = lineBuffer[iptr];
+                    }
                     
 				}
-				else if(lineBuffer[iptr] == '"'){
+                else if(lineBuffer[iptr] == '"'){
 					for(iptr++; lineBuffer[iptr] != '"'; iptr++){
 						fileNamebuf[fnb++] = lineBuffer[iptr];
 					}
