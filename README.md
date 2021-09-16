@@ -2,7 +2,7 @@
 
 ### What?
 
-Blæst is a Just in Time (and soon to be Ahead of Time) compiled programming language, based on the syntax of the B Programming Language from Bell Labs.  Since the B Programming Lanugage was not meant to run on modern computers, as it addresses words and not bytes, Blæst was created to feature a Virtual Machine component similar to Java's JVM.  As well as this, Blæst also features a blazing fast Just-In-Time compiler, rivaling even the likes of Lua.  Plus to top it off, Blæst runs on pretty much every system ever, if it runs C and was made after 1989, chances are it can run Blæst.
+Blæst is a Just in Time (and soon to be Ahead of Time) compiled programming language, based on the syntax of the B Programming Language from Bell Labs.  Since the B Programming Language was not meant to run on modern computers, as it addresses words and not bytes, Blæst was created to feature a Virtual Machine component similar to Java's JVM.  As well as this, Blæst also features a blazing fast Just-In-Time compiler, rivaling even the likes of Lua.  Plus to top it off, Blæst runs on pretty much every system ever, if it runs C and was made after 1989, chances are it can run Blæst.
 
 ### Some things to note
 
