@@ -1,8 +1,28 @@
 # Blæst
 
+### Release v0.1
+
+This is the first release of Blæst, so there is no change log.  Currently Blæst supports enough features to be somewhat useful, but at the same time, its still very far from even having the same features of B, which it is based around.  Blæst will continue to evolve, so don't look at it for what it is now, but look to what it will be very soon in the future.
+
+Changelog:
+
+* Added math with all operators (minus order of operations)
+
+* If/while statements working (not else/else if)
+
+* Local and global variables
+
+* Function calls
+
+* Including files, and other macros
+
+* Rewrote the JIT like 4 times, maybe its faster now
+
+Normally Blæst would be built for multiple different platforms, however since Blæst is not too useful yet, I decided against doing that, since most of Blæst's power at the moment comes directly from its source code.  To build, see the building instructions.
+
 ### What?
 
-Blæst is a Just in Time (and soon to be Ahead of Time) compiled programming language, based on the syntax of the B Programming Language from Bell Labs.  Since the B Programming Lanugage was not meant to run on modern computers, as it addresses words and not bytes, Blæst was created to feature a Virtual Machine component similar to Java's JVM.  As well as this, Blæst also features a blazing fast Just-In-Time compiler, rivaling even the likes of Lua.  Plus to top it off, Blæst runs on pretty much every system ever, if it runs C and was made after 1989, chances are it can run Blæst.
+Blæst is a Just in Time (and soon to be Ahead of Time) compiled programming language, based on the syntax of the B Programming Language from Bell Labs.  Since the B Programming Language was not meant to run on modern computers, as it addresses words and not bytes, Blæst was created to feature a Virtual Machine component similar to Java's JVM.  As well as this, Blæst also features a blazing fast Just-In-Time compiler, rivaling even the likes of Lua.  Plus to top it off, Blæst runs on pretty much every system ever, if it runs C and was made after 1989, chances are it can run Blæst.
 
 ### Some things to note
 
