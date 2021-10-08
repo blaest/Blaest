@@ -93,10 +93,22 @@ typedef struct{
     BLANG_WORD_TYPE startpos;
 } ifdat_t;
 
-/* Move these into a struct */
-int block = 0;
-char macro = 0;
-char lastNL = 1;
+typedef struct{
+    B_State *s;
+    char* lineBuffer;
+    
+    BLANG_WORD_TYPE *finalBuffer;
+    int fbptr;
+    int position;
+    char** strLiteralBuffer;
+    int strLiteralPtr;
+    
+    BLANG_WORD_TYPE fnNumber;
+    
+    int block;
+    char macro;
+    char lastNL;
+} B_JITState;
 
 extern void B_Push(B_State*, BLANG_WORD_TYPE);
 extern BLANG_WORD_TYPE B_Pop(B_State*);
@@ -880,23 +892,23 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
 
 
 void
-B_ResolveStringLiterals(B_State* s, char** stringBuffer, int size, int* position, BLANG_WORD_TYPE* finalBuffer, int* fbptr)
+B_ResolveStringLiterals(B_JITState* bjs)
 {
     int x, y, z;
     
-    for(x = 0; x < size; x++){
+    for(x = 0; x < bjs->strLiteralPtr; x++){
         global_t string;
         char* name = malloc(50 * sizeof(char));
 
-        string.addr = *position;
-        finalBuffer[(*fbptr)++] = ++(*position);
+        string.addr = bjs->position;
+        bjs->finalBuffer[bjs->fbptr++] = ++(bjs->position);
         
-        for(y = 0; stringBuffer[x][y] != 0; y++){
-            finalBuffer[(*fbptr)++] = stringBuffer[x][y];
-            (*position)++;
+        for(y = 0; bjs->strLiteralBuffer[x][y] != 0; y++){
+            bjs->finalBuffer[bjs->fbptr++] = bjs->strLiteralBuffer[x][y];
+            bjs->position++;
         }
-        finalBuffer[(*fbptr)++] = (BLANG_WORD_TYPE)0;
-        (*position)++;
+        bjs->finalBuffer[bjs->fbptr++] = (BLANG_WORD_TYPE)0;
+        bjs->position++;
 
         B_itoa(x, name);
         
@@ -923,7 +935,7 @@ B_ResolveStringLiterals(B_State* s, char** stringBuffer, int size, int* position
         string.name = name;
         string.type = 3;
 
-        s->globals[s->globptr++] = string;
+        bjs->s->globals[bjs->s->globptr++] = string;
 
     }
 }
@@ -1934,7 +1946,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
  * JIT-ing needs to be done recursively B_JIT() itself needs to be reworked a bit
  * more. */
 void 
-B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int *fbptr, int *position, char** strLiteralBuffer, int* strLiteralPtr)
+B_JITStageOne(B_JITState* bjs, FILE* src)
 {
     char** symBuffer = (char**)malloc(1024 * sizeof(char*));
 
@@ -1944,8 +1956,6 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
     
     int stringLiteralStart = 0;
     int inStringLiteral = 0;
-
-    static BLANG_WORD_TYPE fnNumber = 0;
     
 
     int fnStartPos = 0;
@@ -1958,32 +1968,30 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
     int ifPtr = -1;
     int globalStatementNumber = 0;
     int lineEnding = 0;
-
-    lastNL = 1;
-    macro = 0;
-    block = 0;
+    
+   
     
     while((c = getc(src)) != EOF){
-        if(!macro && !inStringLiteral){
+        if(!bjs->macro && !inStringLiteral){
             switch(c){
 
             /* We dont want to parse macros right now */
             case '#':
-                macro = 1;
+                bjs->macro = 1;
             break;
 
             case '}':
                 
-                if(block >= 1){
+                if(bjs->block >= 1){
 
                     if(lab > 0){
-                        for(; fnStartPos < *fbptr; fnStartPos++){
-                            if(finalBuffer[fnStartPos] == 'g' && finalBuffer[fnStartPos - 1] == 'j'){
+                        for(; fnStartPos < bjs->fbptr; fnStartPos++){
+                            if(bjs->finalBuffer[fnStartPos] == 'g' && bjs->finalBuffer[fnStartPos - 1] == 'j'){
                                 char* labname = malloc(64 * sizeof(char));
                                 int lnptr = 0;
 
-                                for(fnStartPos++; finalBuffer[fnStartPos] != 0; fnStartPos++){
-                                    labname[lnptr++] = finalBuffer[fnStartPos];
+                                for(fnStartPos++; bjs->finalBuffer[fnStartPos] != 0; fnStartPos++){
+                                    labname[lnptr++] = bjs->finalBuffer[fnStartPos];
                                 }
                                 labname[lnptr] = 0;
                                 
@@ -1999,7 +2007,7 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                     }
                 }
                 
-                if(block == 1){    
+                if(bjs->block == 1){    
                     /* Free all of our symbols */
                     for(sym--; sym >= 0; sym--){
                         free(symBuffer[sym]);
@@ -2012,11 +2020,11 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                     DBG_RUN(
                         printf("Removing symbols buffer\n");
                     );
-                    finalBuffer[(*fbptr)++] = 'R';
-                    (*position)++;
+                    bjs->finalBuffer[bjs->fbptr++] = 'R';
+                    bjs->position++;
 
-                    finalBuffer[(*fbptr)++] = 'r';
-                    (*position)++;
+                    bjs->finalBuffer[bjs->fbptr++] = 'r';
+                    bjs->position++;
                 }
                 
                 if(ifPtr != -1){
@@ -2034,12 +2042,12 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                         zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
                         zlabel.name = zlabName;
                         zlabel.type = 2;
-                        zlabel.addr = *position;
+                        zlabel.addr = bjs->position;
 
-                        s->globals[s->globptr++] = zlabel;
+                        bjs->s->globals[bjs->s->globptr++] = zlabel;
                         
                         DBG_RUN(
-                            printf("Set position for %s as %d\n", zlabName, *position);
+                            printf("Set position for %s as %d\n", zlabName, bjs->position);
                         );
                         
                         ifPtr--;
@@ -2054,27 +2062,27 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                         );
                         
                         /* Make the jump infinite */
-                        finalBuffer[(*fbptr)++] = 'j';
-                        (*position)++;
-                        finalBuffer[(*fbptr)++] = ifTree[ifPtr].startpos;
-                        (*position)++;
+                        bjs->finalBuffer[bjs->fbptr++] = 'j';
+                        bjs->position++;
+                        bjs->finalBuffer[bjs->fbptr++] = ifTree[ifPtr].startpos;
+                        bjs->position++;
                             
                         zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
                         zlabel.name = zlabName;
                         zlabel.type = 2;
-                        zlabel.addr = *position;
+                        zlabel.addr = bjs->position;
 
-                        s->globals[s->globptr++] = zlabel;
+                        bjs->s->globals[bjs->s->globptr++] = zlabel;
                         
                         DBG_RUN(
-                            printf("Set position for %s as %d\n", zlabName, *position);
+                            printf("Set position for %s as %d\n", zlabName, bjs->position);
                         );
                         
                         ifPtr--;
                     }
                 }
 
-                block--;
+                bjs->block--;
 
             break;
 
@@ -2091,13 +2099,13 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                 global_t label;
                 char* labelFinalName;
                 
-                lineBuffer[x] = 0;
+                bjs->lineBuffer[x] = 0;
                 
 
                 labelFinalName = malloc(1024 * sizeof(char));
-                B_itoa(fnNumber, labelFinalName);
+                B_itoa(bjs->fnNumber, labelFinalName);
                 
-                strcat(labelFinalName, lineBuffer);
+                strcat(labelFinalName, bjs->lineBuffer);
                 /* We picked up a label */
                 
                 DBG_RUN(
@@ -2106,31 +2114,31 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                 
                 label.name = labelFinalName;
                 label.type = 2;
-                label.addr = *position;
+                label.addr = bjs->position;
 
-                s->globals[s->globptr++] = label;
+                bjs->s->globals[bjs->s->globptr++] = label;
 
                 /*printf("Picked up label '%s' at position %d\n", lineBuffer, position);*/
                 
-                lineBuffer = (char*)malloc(2048 * sizeof(char));
+                bjs->lineBuffer = (char*)malloc(2048 * sizeof(char));
                 x = 0;
-                lastNL = 1;
+                bjs->lastNL = 1;
             }
             break;
             
             case '{':
-                if(block == 0){
+                if(bjs->block == 0){
 
                     /* We have a function definition */
-                    if(strhasp(lineBuffer)){
+                    if(strhasp(bjs->lineBuffer)){
                         BLANG_WORD_TYPE *positions;
                         int i, j, k, argsdeep;
                         char* nameBuffer, *argbuf;
                         global_t glob;
 
-                        fnNumber++;
+                        bjs->fnNumber++;
                         
-                        lineBuffer[x] = 0;
+                        bjs->lineBuffer[x] = 0;
 
                         DBG_RUN(
                             printf("Funcdef\n");
@@ -2138,7 +2146,7 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                             printf("Position %d\n", *position);
                         );
                         
-                        fnStartPos = *fbptr;
+                        fnStartPos = bjs->fbptr;
                         
                         /* We are going to push a global that we have a fndef here.
                          * 'position' should be our memory location */
@@ -2151,9 +2159,9 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                         
                         i = 0;
                         j = 0;
-                        for(; lineBuffer[i] != '('; i++){
-                            if(lineBuffer[i] > 32){
-                                nameBuffer[j++] = lineBuffer[i];
+                        for(; bjs->lineBuffer[i] != '('; i++){
+                            if(bjs->lineBuffer[i] > 32){
+                                nameBuffer[j++] = bjs->lineBuffer[i];
                             }
                         }
                         nameBuffer[j] = 0; 
@@ -2163,40 +2171,40 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                         
                         /* This needs to be here so all of our injected code gets 
                          * saved */
-                        glob.addr = *position;
+                        glob.addr = bjs->position;
                         
-                        for(i++; lineBuffer[i-1] != ')'; i++){
-                            if(lineBuffer[i] > 32 && lineBuffer[i] != ',' && lineBuffer[i] != ')'){
-                                argbuf[j++] = lineBuffer[i];
+                        for(i++; bjs->lineBuffer[i-1] != ')'; i++){
+                            if(bjs->lineBuffer[i] > 32 && bjs->lineBuffer[i] != ',' && bjs->lineBuffer[i] != ')'){
+                                argbuf[j++] = bjs->lineBuffer[i];
                             }
                             /* Have we finished collecting this arguement? */
-                            else if(lineBuffer[i] == ',' || lineBuffer[i] == ')'){
+                            else if(bjs->lineBuffer[i] == ',' || bjs->lineBuffer[i] == ')'){
                                 argbuf[j] = 0;
                                 if(strlen(argbuf) > 0){
                                     DBG_RUN(printf("Collected starting arguement %s\n", argbuf););
                                     symBuffer[sym++] = argbuf;
                                     
                                     /* Set the arg value from the value pushed */
-                                    finalBuffer[(*fbptr)++] = 'a';
-                                    (*position)++;
+                                    bjs->finalBuffer[bjs->fbptr++] = 'a';
+                                    bjs->position++;
                                     
-                                    finalBuffer[(*fbptr)++] = -3 - argsdeep;
-                                    (*position)++;
+                                    bjs->finalBuffer[bjs->fbptr++] = -3 - argsdeep;
+                                    bjs->position++;
                                     
-                                    finalBuffer[(*fbptr)++] = 'S';
-                                    (*position)++;
+                                    bjs->finalBuffer[bjs->fbptr++] = 'S';
+                                    bjs->position++;
                                     
-                                    finalBuffer[(*fbptr)++] = 0;
-                                    (*position)++;
+                                    bjs->finalBuffer[bjs->fbptr++] = 0;
+                                    bjs->position++;
                                     
                                     for(k = 0; k < argsdeep; k++){
                                         DBG_RUN(
                                             printf("Updating %d to %d\n", finalBuffer[positions[k]], finalBuffer[positions[k]] + 1);
                                         );
-                                        finalBuffer[positions[k]] += 1;
+                                        bjs->finalBuffer[positions[k]] += 1;
                                     }
                                     
-                                    positions[argsdeep++] = *fbptr - 1;
+                                    positions[argsdeep++] = bjs->fbptr - 1;
                                     
                                     
                                     
@@ -2215,31 +2223,31 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                         
                         glob.function = NULL;
 
-                        s->globals[s->globptr++] = glob;
+                        bjs->s->globals[bjs->s->globptr++] = glob;
 
                         free(positions);
                         free(argbuf);
 
-                        block++;
+                        bjs->block++;
                         goto end;
                     }
                 }
-            block++;
+            bjs->block++;
             lineEnding = 1;
             /* fall through */
 
             case ';':
-                lineBuffer[x] = 0;
+                bjs->lineBuffer[x] = 0;
                 
                 DBG_RUN(
                     printf("NEW LINE FINISHED: %s\n", lineBuffer);
                     printf("%d\n", strstart(lineBuffer, "auto"));
                 );
 
-                if(macro){
-                    macro = 0;
+                if(bjs->macro){
+                    bjs->macro = 0;
                 }
-                else if(block == 0){
+                else if(bjs->block == 0){
                     char* nameBuffer;
                     int lb, nameptr;
                     global_t glob;
@@ -2250,13 +2258,13 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                         printf("GLOBAL DEFN [%s]\n", lineBuffer);
                     );
                     
-                    for(lb = 0, nameptr = 0; lb < x && lineBuffer[lb] != ' ' && lineBuffer[lb] != '['; lb++){
-                        nameBuffer[nameptr++] = lineBuffer[lb];
+                    for(lb = 0, nameptr = 0; lb < x && bjs->lineBuffer[lb] != ' ' && bjs->lineBuffer[lb] != '['; lb++){
+                        nameBuffer[nameptr++] = bjs->lineBuffer[lb];
                     }
                     nameBuffer[nameptr] = 0;
                     glob.name = nameBuffer;
                     
-                    if(lineBuffer[lb] == '['){
+                    if(bjs->lineBuffer[lb] == '['){
                         /* We have an array */
                         /* TODO: Properly implement global arrays */
                     }
@@ -2267,32 +2275,32 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                             printf("NAME IS %s\n", nameBuffer);
                         );
                         lb++;
-                        value = B_atoi(lineBuffer + lb);
+                        value = B_atoi(bjs->lineBuffer + lb);
                         
                         DBG_RUN(
                             printf("VALUE IS %d\n", value);
                         );
                         
                         glob.type = 0;
-                        glob.addr = *position;
+                        glob.addr = bjs->position;
                         glob.function = NULL;
 
-                        s->globals[s->globptr++] = glob;
+                        bjs->s->globals[bjs->s->globptr++] = glob;
                         
-                        finalBuffer[(*fbptr)++] = value;
-                        (*position)++;
+                        bjs->finalBuffer[bjs->fbptr++] = value;
+                        bjs->position++;
                     }
 
                 }
                 else{
-                    B_PrivJITLine(s, lineBuffer, finalBuffer, symBuffer, &block, position, fbptr, &sym, &fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0);
+                    B_PrivJITLine(bjs->s, bjs->lineBuffer, bjs->finalBuffer, symBuffer, &bjs->block, &bjs->position, &bjs->fbptr, &sym, &bjs->fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0);
                 }
                 
 
     end:
-                memset(lineBuffer, 0, 1024 * sizeof(char));
+                memset(bjs->lineBuffer, 0, 1024 * sizeof(char));
                 
-                lastNL = 1;
+                bjs->lastNL = 1;
                 lineEnding = 0;
                 
                 x = 0;
@@ -2301,30 +2309,30 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
             default:
                 
                 if( c > 32){
-                    lastNL = 0; 
-                    lineBuffer[x++] = c;
+                    bjs->lastNL = 0; 
+                    bjs->lineBuffer[x++] = c;
                 }
-                else if(!lastNL){
-                    lineBuffer[x++] = ' ';
-                    lastNL = 1;
+                else if(!bjs->lastNL){
+                    bjs->lineBuffer[x++] = ' ';
+                    bjs->lastNL = 1;
                 }
                 
             break;
             }
         }
-        else if(macro && c == '\n'){
+        else if(bjs->macro && c == '\n'){
 
-            lineBuffer[x] = 0;
+            bjs->lineBuffer[x] = 0;
 
             /* Time to parse what macro we have... Fun... */
             DBG_RUN(
                 printf("GOT MACRO: %s\n", lineBuffer);
             );
             
-            if(lineBuffer[0] == '!'){
+            if(bjs->lineBuffer[0] == '!'){
                 /* This is a hashbang, do nothing with it */
             }
-            else if(strstart(lineBuffer, "include")){
+            else if(strstart(bjs->lineBuffer, "include")){
                 /* We have an include statement */
                 FILE *include;
                 char *fileNamebuf;
@@ -2333,21 +2341,21 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                 fileNamebuf = malloc(512 * sizeof(char));
                 fnb = 0;
                 
-                for(iptr = 0; lineBuffer[iptr] != '<' && lineBuffer[iptr] != '"'; iptr++);
-                if(lineBuffer[iptr] == '<'){
+                for(iptr = 0; bjs->lineBuffer[iptr] != '<' && bjs->lineBuffer[iptr] != '"'; iptr++);
+                if(bjs->lineBuffer[iptr] == '<'){
                     fileNamebuf[0] = 0;
                     strcat(fileNamebuf, BLANG_INCLUDE_PATH);
                     fnb = strlen(fileNamebuf);
                     fileNamebuf[fnb++] = '/';
                     
-                    for(iptr++; lineBuffer[iptr] != '>'; iptr++){
-                        fileNamebuf[fnb++] = lineBuffer[iptr];
+                    for(iptr++; bjs->lineBuffer[iptr] != '>'; iptr++){
+                        fileNamebuf[fnb++] = bjs->lineBuffer[iptr];
                     }
                     
                 }
-                else if(lineBuffer[iptr] == '"'){
-                    for(iptr++; lineBuffer[iptr] != '"'; iptr++){
-                        fileNamebuf[fnb++] = lineBuffer[iptr];
+                else if(bjs->lineBuffer[iptr] == '"'){
+                    for(iptr++; bjs->lineBuffer[iptr] != '"'; iptr++){
+                        fileNamebuf[fnb++] = bjs->lineBuffer[iptr];
                     }
                 }
                 fileNamebuf[fnb] = 0;
@@ -2362,19 +2370,22 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                 }
                 
                 free(fileNamebuf);
-
-                B_JIT(s, include, lineBuffer, finalBuffer, fbptr, position, strLiteralBuffer, strLiteralPtr);
+                
+                /* We don't to treat our included files as if they are macros, 
+                 * so we need to reset this here */
+                bjs->macro = 0;
+                B_JITStageOne(bjs, include);
             }
             
-            macro = 0;
-            memset(lineBuffer, 0, 1024 * sizeof(char));
+            bjs->macro = 0;
+            memset(bjs->lineBuffer, 0, 1024 * sizeof(char));
             x = 0;
-            lastNL = 1;
+            bjs->lastNL = 1;
         }
         else if(inStringLiteral){
             
             /* We found the second quote mark */
-            if(c == '"' && lineBuffer[x - 1] != '\\' && x - stringLiteralStart > 0){
+            if(c == '"' && bjs->lineBuffer[x - 1] != '\\' && x - stringLiteralStart > 0){
                 char* str, *sNum;
                 int strptr;
                 int s = 0;
@@ -2382,14 +2393,14 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                 str = (char*)malloc(64 * sizeof(char));
                 sNum = malloc(50 * sizeof(char));
 
-                lineBuffer[x] = 0;
+                bjs->lineBuffer[x] = 0;
                 /* our string literal start is now the start of the string then to the current position is our whole string */
                 DBG_RUN(
                     printf("String literal found '%s'\n", lineBuffer);
                 );
 
                 /* Copy it over and resolve escape sequences */
-                for(strptr = 0, x = stringLiteralStart; lineBuffer[x] != 0; x++){
+                for(strptr = 0, x = stringLiteralStart; bjs->lineBuffer[x] != 0; x++){
                     /* I can't tell what to make as escape characters, so I've
                      * implemented both and can change them with macros. */
                     
@@ -2401,8 +2412,8 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                         #endif
                     #endif
                     
-                    if(lineBuffer[x] == _BLANG_ESCAPE_CHAR){
-                        switch(lineBuffer[++x]){
+                    if(bjs->lineBuffer[x] == _BLANG_ESCAPE_CHAR){
+                        switch(bjs->lineBuffer[++x]){
                             case _BLANG_ESCAPE_CHAR:
                                 str[strptr++] = _BLANG_ESCAPE_CHAR;
                             break;
@@ -2413,38 +2424,38 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
                                 str[strptr++] = '"';
                             break;
                             default:
-                                printf("ERROR: Unknown Escape sequence %c%c", _BLANG_ESCAPE_CHAR, lineBuffer[x]);
+                                printf("ERROR: Unknown Escape sequence %c%c", _BLANG_ESCAPE_CHAR, bjs->lineBuffer[x]);
                             break;
                         }
                     }
                     else{
-                        str[strptr++] = lineBuffer[x];
+                        str[strptr++] = bjs->lineBuffer[x];
                     }
                 }
                 inStringLiteral = 0;
 
                 x = stringLiteralStart;
-                B_itoa(*strLiteralPtr, sNum);
+                B_itoa(bjs->strLiteralPtr, sNum);
 
                 for(; s < (int)strlen(sNum); s++){
-                    lineBuffer[x++] = sNum[s];
+                    bjs->lineBuffer[x++] = sNum[s];
                 }
-                lineBuffer[x++] = 'S';
-                lineBuffer[x++] = 'l';
-                lineBuffer[x] = 0;
+                bjs->lineBuffer[x++] = 'S';
+                bjs->lineBuffer[x++] = 'l';
+                bjs->lineBuffer[x] = 0;
                 
                 free(sNum);
                 
                 str[strptr] = 0;
 
-                strLiteralBuffer[(*strLiteralPtr)++] = str;
+                bjs->strLiteralBuffer[bjs->strLiteralPtr++] = str;
             }
             else{
-                lineBuffer[x++] = c;
+                bjs->lineBuffer[x++] = c;
             }
         }
         else{
-            lineBuffer[x++] = c;
+            bjs->lineBuffer[x++] = c;
         }
     }
 
@@ -2454,7 +2465,53 @@ B_JIT(B_State *s, FILE* src, char* lineBuffer, BLANG_WORD_TYPE *finalBuffer, int
     
     free(labelBuffer);
 
-    B_ResolveStringLiterals(s, strLiteralBuffer, *strLiteralPtr, position, finalBuffer, fbptr);
+    
+}
+
+void B_JIT(B_State* b, FILE* src){
+    /* Setup our inner compiler variables */
+    B_JITState* state = (B_JITState*)malloc(sizeof(B_JITState));
+    state->s = b;
+    
+    state->lineBuffer = (char*)malloc(BLANG_LINEBUFFER_SIZE * sizeof(char));
+    state->finalBuffer = (BLANG_WORD_TYPE*)malloc(BLANG_MEMORY_SIZE * sizeof(BLANG_WORD_TYPE));
+    state->strLiteralBuffer = (char**)malloc(64 * sizeof(char*));
+    state->fbptr = 0;
+    state->strLiteralPtr = 0;
+    
+    state->lastNL = 1;
+    state->macro = 0;
+    state->block = 0;
+
+    /* We need to keep a separate log of position since some code may grow or 
+     * shirnk, such as global definitons, we need to keep those out of the 
+     * memory locations at compile time. */
+    state->position = 0;
+    
+    state->fnNumber = 0;
+    
+    /* Enter stage 1 of the compile */
+    B_JITStageOne(state, src);
+    
+    #ifndef _BLANG_CUSTOM_LINK_FUNC
+    
+    /* Resolve and link */
+    B_ResolveStringLiterals(state);  
+    B_ResolveGlobals(b, state->finalBuffer, state->fbptr);
+    
+    #else
+    
+    /* Something else will handle everything from here */
+    _BLANG_CUSTOM_LINK_FUNC(state);
+    
+    #endif
+
+    for(; state->strLiteralPtr > 0; state->strLiteralPtr--){
+        free(state->strLiteralBuffer[state->strLiteralPtr - 1]);
+    }
+    
+    /* Eventually move this to ResolveStringLiterals */
+    free(state->strLiteralBuffer);
 }
 
 /*
@@ -2948,10 +3005,6 @@ int main(int argc, char* argv[]){
         return 1;
     }
     else{
-        char *lineBuffer;
-        char** strLiteralBuffer;
-        BLANG_WORD_TYPE *finalBuffer;
-        int fbptr, position, strLiteralPtr;
         
         src = fopen(argv[1], "r");
         if(src == NULL){
@@ -2970,18 +3023,8 @@ int main(int argc, char* argv[]){
         
         B_ExposeFunction(b, "malloc",  B_Malloc, 9);
 
-        lineBuffer = (char*)malloc(BLANG_LINEBUFFER_SIZE * sizeof(char));
-        finalBuffer = (BLANG_WORD_TYPE*)malloc(BLANG_MEMORY_SIZE * sizeof(BLANG_WORD_TYPE));
-        strLiteralBuffer = (char**)malloc(64 * sizeof(char*));
-        fbptr = 0;
-        strLiteralPtr = 0;
-
-        /* We need to keep a separate log of position since some code may grow or 
-         * shirnk, such as global definitons, we need to keep those out of the 
-         * memory locations at compile time. */
-        position = 0;
-
-        B_JIT(b, src, lineBuffer, finalBuffer, &fbptr, &position, strLiteralBuffer, &strLiteralPtr);
+        
+        B_JIT(b, src);
         
         DBG_RUN(
             printf("GLOBALS\n");
@@ -2989,15 +3032,6 @@ int main(int argc, char* argv[]){
                 printf("%s\n", b->globals[x].name);
             }
         );
-        
-        B_ResolveGlobals(b, finalBuffer, fbptr);
-
-        for(; strLiteralPtr > 0; strLiteralPtr--){
-            free(strLiteralBuffer[strLiteralPtr - 1]);
-        }
-        
-        /* Eventually move this to ResolveStringLiterals */
-        free(strLiteralBuffer);
         
         DBG_RUN(
             for(x = 0; x < (BLANG_WORD_TYPE)position; x++){
