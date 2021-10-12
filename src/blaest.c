@@ -503,6 +503,54 @@ B_Run(B_State* s, int pc)
             }
             break;
             
+            case '<':{
+                BLANG_WORD_TYPE left,right;
+                
+                /* Pop our values from the stack */
+                right = B_Pop(s);
+                left = B_Pop(s);
+                
+                DBG_RUN(
+                    printf("Compare %d < %d\n", left, right);
+                );
+                
+                if(left < right){
+                    s->a = 1;
+                }
+                else{
+                    s->a = 0;
+                }
+                
+                DBG_RUN(
+                    printf("Set A to %d\n", s->a);
+                );
+            }
+            break;
+            
+            case '>':{
+                BLANG_WORD_TYPE left,right;
+                
+                /* Pop our values from the stack */
+                right = B_Pop(s);
+                left = B_Pop(s);
+                
+                DBG_RUN(
+                    printf("Compare %d > %d\n", left, right);
+                );
+                
+                if(left > right){
+                    s->a = 1;
+                }
+                else{
+                    s->a = 0;
+                }
+                
+                DBG_RUN(
+                    printf("Set A to %d\n", s->a);
+                );
+            }
+            break;
+            
             /* Jump if the accumulator is zero */
             case 'z':{
                 BLANG_WORD_TYPE mempos;
@@ -1197,7 +1245,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
         free(statementNumBuffer);
         free(statementSubNumBuffer);
         
-       /* TODO: Set from here */ 
+        /* TODO: Set from here */ 
         if(lineEnding){
             /* Since we use this same function for both If and While definitions
              * we need to be able to tell them apart, specifically here since we
@@ -1252,6 +1300,123 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
     }
     else if(strstart(lineBuffer, "else")){
         /* Check for else if here, doing so above causes issues */
+    }
+    else if(strhas(lineBuffer, '<') || strhas(lineBuffer, '>')){
+        int lbptr, comparison;
+        char* leftSide;
+        
+        comparison = 0;
+        leftSide = (char*)malloc(64 * sizeof(char));
+        
+        DBG_RUN(
+            printf("Finding left side...\n");
+        );
+        
+        /* Get the left side of the compare */
+        for(lbptr = 0; lineBuffer[lbptr] != '<' && lineBuffer[lbptr] != '>'; lbptr++){
+            leftSide[lbptr] = lineBuffer[lbptr];
+        }
+        
+        leftSide[lbptr] = 0;
+        
+        
+        DBG_RUN(
+            printf("Got left side: %s\n", leftSide);
+        );
+        
+        /* Find out which type of compare we are doing, and set the variable 
+         * accordingly */
+        if(lineBuffer[lbptr] == '<'){
+            comparison = 1;
+        }
+        else if(lineBuffer[lbptr] == '>'){
+            comparison = 2;
+        }
+        
+        if(lineBuffer[lbptr + 1] == '='){
+            /* We increase the lbptr by two since we will use that to find the 
+             * right side, and <= or >= take up two characters */
+            lbptr += 2;
+            
+            /* Update to reflect we are also checking equals */
+            if(comparison == 1){
+                comparison = 3;
+            }
+            else if(comparison == 2){
+                comparison = 4;
+            }
+        }
+        else{
+            /* If we are just < or >, those both only take up one character, so
+             * we only need one additional character */
+            lbptr += 1;
+        }
+        
+        DBG_RUN(
+            printf("Got other side: %s\n", lineBuffer + lbptr);
+        );
+        
+        /* Now we compile everything */
+        B_stripString(leftSide);
+        jit_line_recur(leftSide);
+        
+        
+        finalBuffer[(*fbptr)++] = 'O';
+        (*position)++;
+        
+        jit_line_recur(lineBuffer + lbptr);
+        
+        finalBuffer[(*fbptr)++] = 'O';
+        (*position)++;
+        
+        /* Setup the specific comparisons */
+        if(comparison == 1){
+            finalBuffer[(*fbptr)++] = '<';
+            (*position)++;
+        }
+        else if(comparison == 2){
+            finalBuffer[(*fbptr)++] = '>';
+            (*position)++;
+        }
+        else{
+            if(comparison == 3){
+            finalBuffer[(*fbptr)++] = '<';
+            (*position)++;
+            }
+            else if(comparison == 4){
+                finalBuffer[(*fbptr)++] = '>';
+                (*position)++;
+            }
+            
+            /* Because we also need to check equals, we actually add the results
+             * of the check for either < or > to the result for =.  As long as 
+             * the result is 1 we will run an if statement */
+            finalBuffer[(*fbptr)++] = '+';
+            (*position)++;
+            
+            /* We also need to run everything through the compiler again since 
+             * we are testing for another condition */
+            jit_line_recur(leftSide);
+        
+        
+            finalBuffer[(*fbptr)++] = 'O';
+            (*position)++;
+            
+            jit_line_recur(lineBuffer + lbptr);
+            
+            finalBuffer[(*fbptr)++] = 'O';
+            (*position)++;
+            
+            finalBuffer[(*fbptr)++] = 'e';
+            (*position)++;
+            
+            finalBuffer[(*fbptr)++] = '+';
+            (*position)++;
+            
+            finalBuffer[(*fbptr)++] = '=';
+            (*position)++;
+        }
+        free(leftSide);
     }
     /* Make this faster */
     else if(strhas(lineBuffer, '=')){
@@ -2142,8 +2307,8 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
 
                         DBG_RUN(
                             printf("Funcdef\n");
-                            printf("FNDEF: %s\n", lineBuffer);
-                            printf("Position %d\n", *position);
+                            printf("FNDEF: %s\n", bjs->lineBuffer);
+                            printf("Position %d\n", bjs->position);
                         );
                         
                         fnStartPos = bjs->fbptr;
@@ -2198,9 +2363,7 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
                                     bjs->position++;
                                     
                                     for(k = 0; k < argsdeep; k++){
-                                        DBG_RUN(
-                                            printf("Updating %d to %d\n", finalBuffer[positions[k]], finalBuffer[positions[k]] + 1);
-                                        );
+                                        
                                         bjs->finalBuffer[positions[k]] += 1;
                                     }
                                     
@@ -2239,10 +2402,6 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
             case ';':
                 bjs->lineBuffer[x] = 0;
                 
-                DBG_RUN(
-                    printf("NEW LINE FINISHED: %s\n", lineBuffer);
-                    printf("%d\n", strstart(lineBuffer, "auto"));
-                );
 
                 if(bjs->macro){
                     bjs->macro = 0;
@@ -2255,7 +2414,7 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
                     nameBuffer = malloc(64 * sizeof(char));
                     
                     DBG_RUN(
-                        printf("GLOBAL DEFN [%s]\n", lineBuffer);
+                        printf("GLOBAL DEFN [%s]\n", bjs->lineBuffer);
                     );
                     
                     for(lb = 0, nameptr = 0; lb < x && bjs->lineBuffer[lb] != ' ' && bjs->lineBuffer[lb] != '['; lb++){
@@ -2326,7 +2485,7 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
 
             /* Time to parse what macro we have... Fun... */
             DBG_RUN(
-                printf("GOT MACRO: %s\n", lineBuffer);
+                printf("GOT MACRO: %s\n", bjs->lineBuffer);
             );
             
             if(bjs->lineBuffer[0] == '!'){
@@ -2396,7 +2555,7 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
                 bjs->lineBuffer[x] = 0;
                 /* our string literal start is now the start of the string then to the current position is our whole string */
                 DBG_RUN(
-                    printf("String literal found '%s'\n", lineBuffer);
+                    printf("String literal found '%s'\n", bjs->lineBuffer);
                 );
 
                 /* Copy it over and resolve escape sequences */
@@ -2505,6 +2664,13 @@ void B_JIT(B_State* b, FILE* src){
     _BLANG_CUSTOM_LINK_FUNC(state);
     
     #endif
+    
+            
+    DBG_RUN(
+        for(state->fbptr = 0; state->fbptr < state->position; x++){
+            printf("%d - %x (%c)\n", state->fbptr, b->memory[x], b->memory[x]);
+        }
+    );
 
     for(; state->strLiteralPtr > 0; state->strLiteralPtr--){
         free(state->strLiteralBuffer[state->strLiteralPtr - 1]);
@@ -3032,12 +3198,7 @@ int main(int argc, char* argv[]){
                 printf("%s\n", b->globals[x].name);
             }
         );
-        
-        DBG_RUN(
-            for(x = 0; x < (BLANG_WORD_TYPE)position; x++){
-                printf("%d - %x (%c)\n", x, b->memory[x], b->memory[x]);
-            }
-        );
+
 
         /* Actually run the program */
         x = B_Run(b, B_functionLookup(b, "main"));

@@ -30,9 +30,9 @@ Currently Blæst supports
 
 * Macros (just include for now)
 
-### Planned
-
 * Test conditions <, >, <=, >=
+
+### Planned
 
 * Else If/Else statements
 
