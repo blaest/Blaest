@@ -1,4 +1,4 @@
-HELLO # Blæst
+# Blæst
 
 ### What?
 
