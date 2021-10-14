@@ -9,6 +9,9 @@
 /* Size of the program memory (in words)*/
 #define BLANG_MEMORY_SIZE 10000
 
+/* How many mallocs you can have without freeing memory */
+#define BLANG_MEMORY_LEASES 256
+
 /* Size of the stack  (in words)*/
 #define BLANG_STACK_SIZE 2048
 
@@ -60,9 +63,16 @@
 #endif
 
 typedef struct{
+    BLANG_WORD_TYPE pos;
+    BLANG_WORD_TYPE size;
+} memlease_t;
+
+typedef struct{
     BLANG_WORD_TYPE* stack;
     BLANG_WORD_TYPE* args;
     unsigned char* mmap;
+    memlease_t* memoryLeases;
+    BLANG_WORD_TYPE memlptr;
     BLANG_WORD_TYPE* memory;
     
     struct global_t* globals;
@@ -2666,11 +2676,11 @@ void B_JIT(B_State* b, FILE* src){
     #endif
     
             
-    DBG_RUN(
+    /*DBG_RUN(
         for(state->fbptr = 0; state->fbptr < state->position; x++){
             printf("%d - %x (%c)\n", state->fbptr, b->memory[x], b->memory[x]);
         }
-    );
+    );*/
 
     for(; state->strLiteralPtr > 0; state->strLiteralPtr--){
         free(state->strLiteralBuffer[state->strLiteralPtr - 1]);
@@ -2695,6 +2705,12 @@ B_CreateState()
 
     state->memory = (BLANG_WORD_TYPE*)malloc( (BLANG_MEMORY_SIZE + BLANG_STACK_SIZE) * sizeof(BLANG_WORD_TYPE));
     state->mmap = (unsigned char*)malloc((BLANG_MEMORY_SIZE / BLANG_MMAP_LIMIT) * sizeof(unsigned char));
+    memset(state->mmap, 0, (BLANG_MEMORY_SIZE / BLANG_MMAP_LIMIT) * sizeof(unsigned char));
+    
+    state->memoryLeases = (memlease_t*)malloc(BLANG_MEMORY_LEASES  * sizeof(memlease_t));
+    memset(state->memoryLeases, 0, BLANG_MEMORY_LEASES * sizeof(memlease_t));
+    
+    state->memlptr = 0;
 
     state->globals = (global_t*)malloc( 1024 * sizeof(global_t));
     state->globptr = 0;
@@ -2794,7 +2810,8 @@ B_Malloc(B_State* s)
 {
     BLANG_WORD_TYPE actsize = B_GetArg(s, 1);
     BLANG_WORD_TYPE size = 0;
-    int x, y, pos;
+    int x, y, pos, ml;
+    memlease_t lease;
 
     if(actsize % BLANG_MMAP_LIMIT){
         size++;    
@@ -2817,13 +2834,46 @@ B_Malloc(B_State* s)
 
     DBG_RUN (printf("Found malloc position at %d\n", x - y));
     pos = x - y;
-
+    
+    
+    lease.pos = pos;
+    lease.size = size;
+    
+    for(ml = 0; ml < BLANG_MEMORY_LEASES; ml++){
+        if(s->memoryLeases[ml].pos == 0 && s->memoryLeases[ml].size == 0){
+            DBG_RUN( printf("[MLEASE] Memory leased at %d (pos: %d, size: %d)\n", ml, pos, size) );
+            s->memoryLeases[ml] = lease;
+            break;
+        }
+    }
+    
     for(y = x - y; y < x ; y++){
         s->mmap[y] = 1;
         DBG_RUN(printf("[MMAP] SET [%x] - %d\n", y, s->mmap[y]));
         
     }
     return pos * BLANG_MMAP_LIMIT;
+}
+
+BLANG_WORD_TYPE
+B_Free(B_State* s)
+{
+    BLANG_WORD_TYPE pos = B_GetArg(s, 1) / BLANG_MMAP_LIMIT;
+    BLANG_WORD_TYPE ml, x;
+    
+
+    for(ml = 0; ml < BLANG_MEMORY_LEASES; ml++){
+        if(s->memoryLeases[ml].pos <= pos && s->memoryLeases[ml].pos + s->memoryLeases[ml].size >= pos){
+            DBG_RUN( printf("[MLEASE] Memory freed at %d (pos: %d, size: %d)\n", ml, s->memoryLeases[ml].pos, s->memoryLeases[ml].size) );
+            
+            for(x = s->memoryLeases[ml].pos; x < s->memoryLeases[ml].pos + s->memoryLeases[ml].size; x++){
+                s->mmap[x] = 0;
+            }
+            memset(&s->memoryLeases[ml], 0, sizeof(memlease_t));
+        }
+    }
+    
+    return 0;
 }
 
 BLANG_WORD_TYPE B_putnumb(B_State* s){
@@ -3188,6 +3238,7 @@ int main(int argc, char* argv[]){
         B_ExposeFunction(b, "close",  B_sysCLOSE, 3);
         
         B_ExposeFunction(b, "malloc",  B_Malloc, 9);
+        B_ExposeFunction(b, "free",  B_Free, 10);
 
         
         B_JIT(b, src);

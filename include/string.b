@@ -122,7 +122,7 @@ strip(string){
 	auto index;
 
 	index = 0;
-	while(string[0] == 32){
+	while(string[0] <= 32){
 		string += 1;
 	}
 
@@ -132,7 +132,7 @@ strip(string){
 
 	index -= 1;
 
-	while(string[index] == 32){
+	while(string[index] <= 32){
 		string[index] = 0;
 		index -= 1;
 	}
@@ -141,7 +141,7 @@ strip(string){
 }
 
 lstrip(string){
-    while(string[0] == 32){
+    while(string[0] <= 32){
 		string += 1;
 	}
     return string;
