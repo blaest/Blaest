@@ -7,19 +7,20 @@
 /* CONFIGURATION BLOCK */
 
 /* Size of the program memory (in words)*/
-#define BLANG_MEMORY_SIZE 10000
+#define BLANG_MEMORY_SIZE 32000
 
 /* How many mallocs you can have without freeing memory */
 #define BLANG_MEMORY_LEASES 256
 
 /* Size of the stack  (in words)*/
-#define BLANG_STACK_SIZE 2048
+#define BLANG_STACK_SIZE 4096
 
 /* Size of the line buffer */
 #define BLANG_LINEBUFFER_SIZE 1024
 
 /* How many words should each block of memory constitute? */
 #define BLANG_MMAP_LIMIT 10
+
 
 /* Use the B Lang style of escapes (* instead of \, ex. '*n' instead of '\n') */
 /* #define BLANG_OLD_STYLE_ESCAPE */
@@ -62,6 +63,13 @@
 #define DBG_RUN(n)
 #endif
 
+#ifdef _BLANG_USE_BUFFER
+    #define BLANG_BUFFER_TYPE char*
+#else
+    #define BLANG_BUFFER_TYPE FILE*
+    #define BLANG_BUFFER_IS_FILE 1
+#endif
+
 typedef struct{
     BLANG_WORD_TYPE pos;
     BLANG_WORD_TYPE size;
@@ -101,6 +109,7 @@ typedef struct{
     BLANG_WORD_TYPE statementNumber;
     BLANG_WORD_TYPE statementSubNumber;
     BLANG_WORD_TYPE startpos;
+    BLANG_WORD_TYPE endpos;
 } ifdat_t;
 
 typedef struct{
@@ -137,7 +146,12 @@ strstart(const char* s1, const char* s2)
             return 0;
         }
     }
-    return 1;
+    if(s2[x] == 0){
+        return 1;
+    }
+    else{
+        return 0;
+    }
 }
 
 /* [Might be pending removal] Finds if the string given has and opening and
@@ -1003,22 +1017,23 @@ B_ResolveStringLiterals(B_JITState* bjs)
  */
 
 /* This will make everything easier, trust me */
-#define jit_line_recur(x) B_PrivJITLine(s, x, finalBuffer, symBuffer, block, position, fbptr, sym, fnNumber, ifTree, globalStatementNumber, ifPtr, lineEnding, isNegative)
+#define jit_line_recur(x) B_PrivJITLine(s, x, finalBuffer, symBuffer, globals, globptr, block, position, fbptr, sym, fnNumber, ifTree, globalStatementNumber, ifPtr, lineEnding, isNegative)
 
-#define BLANG_FROM_BLANK             0
-#define BLANG_FROM_IF_NO_BLOCK         1
+#define BLANG_FROM_BLANK            0
+#define BLANG_FROM_IF_NO_BLOCK      1
 #define BLANG_FROM_IF_BLOCK         2
-#define BLANG_FROM_ELSE_NO_BLOCK     3
-#define BLANG_FROM_ELSE_BLOCK         4
-#define BLANG_FROM_WHILE_NO_BLOCK     5
-#define BLANG_FROM_WHILE_BLOCK        6
+#define BLANG_FROM_ELSE_NO_BLOCK    3
+#define BLANG_FROM_ELSE_BLOCK       4
+#define BLANG_FROM_WHILE_NO_BLOCK   5
+#define BLANG_FROM_WHILE_BLOCK      6
+#define BLANG_SEARCH                7
 
 static const char B_Operators[] = {'+', '-', '*', '/', '%', '&', '|', '^'};
 
 /* TODO: Eventaully turn this long list of arguements into a single struct that
  * gets passed around. (This will require a very lengthy rewrite)*/
 static void
-B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char** symBuffer, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative)
+B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char** symBuffer, global_t* globals, BLANG_WORD_TYPE* globptr, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative)
 {
     /* Eventually these will need to be added to the struct once that gets 
      * implemented */
@@ -1175,10 +1190,34 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
             (*position)++;
         }
     }
-    else if(strstart(lineBuffer, "if") || strstart(lineBuffer, "while")){
+    else if(strstart(lineBuffer, "if") || strstart(lineBuffer, "while") || strstart(lineBuffer, "else if")){
         /* We have an if statement */
         int ifptr, cptr, startpos, inBrackets;
         char* cmpBuffer, *statementNumBuffer, *statementSubNumBuffer;
+        
+        if(ifTree[*ifPtr].from == BLANG_SEARCH && lineBuffer[0] != 'e'){
+            global_t zlabel;
+            char* zlabName;
+            /* We have a previous if statement looking for an else if */
+            DBG_RUN(
+                printf("Found no new statement for previous statement, ending, called from if parse\n");
+            );
+            
+            /* There is no actual new statement */
+            DBG_RUN(
+                printf("Found no new statement for previous statement, ending\n");
+            );
+            
+            zlabName = B_GenerateStatementJumpName('d', ifTree[*ifPtr].statementNumber, 0);
+            zlabel.name = zlabName;
+            zlabel.type = 2;
+            zlabel.addr = ifTree[*ifPtr].endpos;
+
+            globals[(*globptr)++] = zlabel;
+            
+            (*ifPtr)--;
+            
+        }
         
         cmpBuffer = (char*)malloc(64 * sizeof(char));
         
@@ -1224,11 +1263,18 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
         statementNumBuffer = (char*)malloc(25 * sizeof(char));
         statementSubNumBuffer = (char*)malloc(25 * sizeof(char));
         
-        (*ifPtr)++;
         
-        ifTree[*ifPtr].statementNumber = testGlobalNum++;
-        ifTree[*ifPtr].statementSubNumber = 0;
         
+        if(lineBuffer[0] == 'e'){
+            ifTree[*ifPtr].statementSubNumber++;
+        }
+        else{
+            (*ifPtr)++;
+            
+            ifTree[*ifPtr].statementNumber = testGlobalNum++;
+            ifTree[*ifPtr].statementSubNumber = 0;
+        }
+    
         B_itoa(ifTree[*ifPtr].statementNumber, statementNumBuffer);
         B_itoa(ifTree[*ifPtr].statementSubNumber, statementSubNumBuffer);
         
@@ -1263,7 +1309,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
              * and see if that is an i or a w, and we can infer the statement 
              * type based on that */
              
-            if(lineBuffer[0] == 'i'){
+            if(lineBuffer[0] == 'i' || lineBuffer[0] == 'e'){
                 ifTree[*ifPtr].from = BLANG_FROM_IF_BLOCK;
             }
             else{
@@ -1276,7 +1322,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
             global_t zlabel;
             char* zlabName = B_GenerateStatementJumpName('s', ifTree[*ifPtr].statementNumber, ifTree[*ifPtr].statementSubNumber);
             
-            for(ifptr++; lineBuffer[ifptr] <= 32; ifptr++);
+            for(ifptr++; lineBuffer[ifptr] <= 32; ifptr++)
+            ;
             
             DBG_RUN(
                 printf("Compiling statement '%s'\n", lineBuffer + ifptr);
@@ -1284,7 +1331,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
             
             jit_line_recur(lineBuffer + ifptr);
             
-            if(lineBuffer[0] == 'i'){
+            if(lineBuffer[0] == 'i' || lineBuffer[0] == 'e'){
                 ifTree[*ifPtr].from = BLANG_FROM_IF_NO_BLOCK;
             }
             else{
@@ -1308,8 +1355,10 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
             /* Now position should be set for our zero condition */
         }
     }
-    else if(strstart(lineBuffer, "else")){
-        /* Check for else if here, doing so above causes issues */
+    else if(strstart(lineBuffer, "else")){   
+        
+        ifTree[*ifPtr].from = BLANG_FROM_ELSE_BLOCK;
+        
     }
     else if(strhas(lineBuffer, '<') || strhas(lineBuffer, '>')){
         int lbptr, comparison;
@@ -2121,13 +2170,17 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
  * JIT-ing needs to be done recursively B_JIT() itself needs to be reworked a bit
  * more. */
 void 
-B_JITStageOne(B_JITState* bjs, FILE* src)
+B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
 {
     char** symBuffer = (char**)malloc(1024 * sizeof(char*));
 
     char c; 
     int x = 0;
     int sym = 0;
+    
+    #ifdef _BLANG_USE_BUFFER
+    int bptr = 0;
+    #endif
     
     int stringLiteralStart = 0;
     int inStringLiteral = 0;
@@ -2145,8 +2198,11 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
     int lineEnding = 0;
     
    
-    
+    #ifdef _BLANG_USE_BUFFER
+    while((c = src[bptr++]) != 0){
+    #else
     while((c = getc(src)) != EOF){
+    #endif
         if(!bjs->macro && !inStringLiteral){
             switch(c){
 
@@ -2157,7 +2213,126 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
 
             case '}':
                 
-                if(bjs->block >= 1){
+                if(ifPtr != -1){
+                    /* Handle our if statements here */
+                    
+                    /* Get rid of any outgoing searches before we check what statement we have */
+                    if(ifTree[ifPtr].from == BLANG_SEARCH ){
+                        /* Resolve ALL searches */
+                        while(ifTree[ifPtr].from == BLANG_SEARCH){
+                            global_t zlabel;
+                            char* zlabName;
+                            /* There is no actual new statement */
+                            
+                            DBG_RUN(
+                                zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
+                                printf("Found no new statement for previous statement, %s, ending\n", zlabName );
+                                free(zlabName);
+                            );
+                            
+                            zlabName = B_GenerateStatementJumpName('d', ifTree[ifPtr].statementNumber, 0);
+                            zlabel.name = zlabName;
+                            zlabel.type = 2;
+                            zlabel.addr = ifTree[ifPtr].endpos;
+                            
+
+                            bjs->s->globals[bjs->s->globptr++] = zlabel;
+                            ifPtr--;
+                            
+                            DBG_RUN(
+                                printf("Ending search\n");
+                                printf("IFPTR: %d\n", ifPtr);
+                            );
+                        }
+                    }
+                    
+                    /* Now check what kind of statement we are coming from */
+                    if(ifTree[ifPtr].from == BLANG_FROM_IF_BLOCK){
+                        global_t zlabel;
+                        char* zlabName;
+                        char* doneName;
+                        int dnptr = 0;
+                        
+                        doneName = B_GenerateStatementJumpName('d', ifTree[ifPtr].statementNumber, 0);
+                        bjs->finalBuffer[bjs->fbptr++] = 'j';
+                        bjs->position++;
+                        
+                        bjs->finalBuffer[bjs->fbptr++] = 'g';
+                        for(dnptr = 0; doneName[dnptr] != 0; dnptr++){
+                            bjs->finalBuffer[bjs->fbptr++] = doneName[dnptr];
+                        }
+                        bjs->finalBuffer[bjs->fbptr++] = 0;
+                        bjs->position++;
+                        
+                        DBG_RUN(
+                            printf("We are post if block\n");
+                            printf("IFPTR: %d\n", ifPtr);
+                        );
+                        
+                        
+                        
+                        zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
+                        
+                        DBG_RUN(
+                            printf("ZLabName is %s\n", zlabName);
+                        );
+                        
+                        zlabel.name = zlabName;
+                        zlabel.type = 2;
+                        zlabel.addr = bjs->position;
+
+                        bjs->s->globals[bjs->s->globptr++] = zlabel;
+                        
+                        ifTree[ifPtr].from = BLANG_SEARCH;
+                        ifTree[ifPtr].endpos = bjs->position;
+                        
+                        DBG_RUN(
+                            printf("Set position for %s as %d\n", zlabName, bjs->position);
+                            printf("[IFLOG] %ds%dn set to BLANG_SEARCH\n", ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
+                            printf("[IFLOG] %ds%dn Endpos set to %d\n", ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber, ifTree[ifPtr].endpos);
+                        );
+                        
+                       
+                        
+                    }
+                    else if(ifTree[ifPtr].from == BLANG_FROM_ELSE_BLOCK){
+                        /* For else we just set search */
+                        
+                        ifTree[ifPtr].from = BLANG_SEARCH;
+                        ifTree[ifPtr].endpos = bjs->position;
+                    }
+                    else if(ifTree[ifPtr].from == BLANG_FROM_WHILE_BLOCK){
+                        global_t zlabel;
+                        char* zlabName;
+                        
+                        DBG_RUN(
+                            printf("We are post if block\n");
+                            printf("IFPTR: %d\n", ifPtr);
+                        );
+                        
+                        /* Make the jump infinite */
+                        bjs->finalBuffer[bjs->fbptr++] = 'j';
+                        bjs->position++;
+                        bjs->finalBuffer[bjs->fbptr++] = ifTree[ifPtr].startpos;
+                        bjs->position++;
+                            
+                        zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
+                        zlabel.name = zlabName;
+                        zlabel.type = 2;
+                        zlabel.addr = bjs->position;
+
+                        bjs->s->globals[bjs->s->globptr++] = zlabel;
+                        
+                        DBG_RUN(
+                            printf("Set position for %s as %d\n", zlabName, bjs->position);
+                        );
+                        
+                        ifPtr--;
+                    }
+                    
+                }
+                
+                                if(bjs->block >= 1){
 
                     if(lab > 0){
                         for(; fnStartPos < bjs->fbptr; fnStartPos++){
@@ -2200,61 +2375,6 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
 
                     bjs->finalBuffer[bjs->fbptr++] = 'r';
                     bjs->position++;
-                }
-                
-                if(ifPtr != -1){
-                    /* Handle our if statements here */
-                    
-                    if(ifTree[ifPtr].from == BLANG_FROM_IF_BLOCK){
-                        global_t zlabel;
-                        char* zlabName;
-                        
-                        DBG_RUN(
-                            printf("We are post if block\n");
-                            printf("IFPTR: %d\n", ifPtr);
-                        );
-                        
-                        zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
-                        zlabel.name = zlabName;
-                        zlabel.type = 2;
-                        zlabel.addr = bjs->position;
-
-                        bjs->s->globals[bjs->s->globptr++] = zlabel;
-                        
-                        DBG_RUN(
-                            printf("Set position for %s as %d\n", zlabName, bjs->position);
-                        );
-                        
-                        ifPtr--;
-                    }
-                    else if(ifTree[ifPtr].from == BLANG_FROM_WHILE_BLOCK){
-                        global_t zlabel;
-                        char* zlabName;
-                        
-                        DBG_RUN(
-                            printf("We are post if block\n");
-                            printf("IFPTR: %d\n", ifPtr);
-                        );
-                        
-                        /* Make the jump infinite */
-                        bjs->finalBuffer[bjs->fbptr++] = 'j';
-                        bjs->position++;
-                        bjs->finalBuffer[bjs->fbptr++] = ifTree[ifPtr].startpos;
-                        bjs->position++;
-                            
-                        zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
-                        zlabel.name = zlabName;
-                        zlabel.type = 2;
-                        zlabel.addr = bjs->position;
-
-                        bjs->s->globals[bjs->s->globptr++] = zlabel;
-                        
-                        DBG_RUN(
-                            printf("Set position for %s as %d\n", zlabName, bjs->position);
-                        );
-                        
-                        ifPtr--;
-                    }
                 }
 
                 bjs->block--;
@@ -2462,7 +2582,7 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
 
                 }
                 else{
-                    B_PrivJITLine(bjs->s, bjs->lineBuffer, bjs->finalBuffer, symBuffer, &bjs->block, &bjs->position, &bjs->fbptr, &sym, &bjs->fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0);
+                    B_PrivJITLine(bjs->s, bjs->lineBuffer, bjs->finalBuffer, symBuffer, bjs->s->globals, &bjs->s->globptr, &bjs->block, &bjs->position, &bjs->fbptr, &sym, &bjs->fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0);
                 }
                 
 
@@ -2502,6 +2622,7 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
                 /* This is a hashbang, do nothing with it */
             }
             else if(strstart(bjs->lineBuffer, "include")){
+                #ifdef BLANG_BUFFER_IS_FILE
                 /* We have an include statement */
                 FILE *include;
                 char *fileNamebuf;
@@ -2544,6 +2665,9 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
                  * so we need to reset this here */
                 bjs->macro = 0;
                 B_JITStageOne(bjs, include);
+                #else
+                    _BLANG_LOAD_INCLUDE
+                #endif
             }
             
             bjs->macro = 0;
@@ -2627,6 +2751,40 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
             bjs->lineBuffer[x++] = c;
         }
     }
+    
+    DBG_RUN(
+        printf("Resolving lost if statements\n");
+    );
+    
+    for(; ifPtr > -1; ifPtr--){
+        printf("IFPTR Value: %d\n", ifTree[ifPtr].statementNumber);
+        if(ifTree[ifPtr].from == BLANG_SEARCH || ifTree[ifPtr].from == BLANG_FROM_ELSE_BLOCK){
+            global_t zlabel;
+            char* zlabName;
+            /* There is no actual new statement */
+            
+            DBG_RUN(
+                zlabName = B_GenerateStatementJumpName('s', ifTree[ifPtr].statementNumber, ifTree[ifPtr].statementSubNumber);
+                printf("Found no new statement for previous statement, %s, ending\n", zlabName );
+                free(zlabName);
+            );
+            
+            zlabName = B_GenerateStatementJumpName('d', ifTree[ifPtr].statementNumber, 0);
+            zlabel.name = zlabName;
+            zlabel.type = 2;
+            zlabel.addr = ifTree[ifPtr].endpos;
+
+            bjs->s->globals[bjs->s->globptr++] = zlabel;
+            ifPtr--;
+            
+            DBG_RUN(
+                printf("Ending search\n");
+                printf("IFPTR: %d\n", ifPtr);
+            );
+            
+            
+        }
+    }
 
     free(symBuffer);
     
@@ -2637,7 +2795,9 @@ B_JITStageOne(B_JITState* bjs, FILE* src)
     
 }
 
-void B_JIT(B_State* b, FILE* src){
+void
+B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
+{
     /* Setup our inner compiler variables */
     B_JITState* state = (B_JITState*)malloc(sizeof(B_JITState));
     state->s = b;
@@ -2676,11 +2836,13 @@ void B_JIT(B_State* b, FILE* src){
     #endif
     
             
-    /*DBG_RUN(
-        for(state->fbptr = 0; state->fbptr < state->position; x++){
-            printf("%d - %x (%c)\n", state->fbptr, b->memory[x], b->memory[x]);
+    DBG_RUN(
+        printf("\n\nPost Compile Memory Dump:\n");
+        printf("POS  | HEX  | DEC  | CHAR \n");
+        for(state->fbptr = 0; state->fbptr < state->position; state->fbptr++){
+            printf("%4d | %4x | %4d | %4c \n", state->fbptr, b->memory[state->fbptr], b->memory[state->fbptr], b->memory[state->fbptr]);
         }
-    );*/
+    );
 
     for(; state->strLiteralPtr > 0; state->strLiteralPtr--){
         free(state->strLiteralBuffer[state->strLiteralPtr - 1]);
@@ -3204,6 +3366,37 @@ B_sysCLOSE(B_State *s){
     return ret;
 }
 
+#ifdef _BLANG_USE_BUFFER
+
+BLANG_WORD_TYPE B_CompileAndRun
+(char* src)
+{
+    BLANG_WORD_TYPE x;
+    B_State* b;
+    
+    b = B_CreateState();
+        
+    /* Expose our system calls to Blaest, all other functions will come from
+     * our standard library. */
+    B_ExposeFunction(b, "read",  B_sysREAD, 0);
+    B_ExposeFunction(b, "write",  B_sysWRITE, 1);
+    B_ExposeFunction(b, "open",  B_sysOPEN, 2);
+    B_ExposeFunction(b, "close",  B_sysCLOSE, 3);
+    
+    B_ExposeFunction(b, "malloc",  B_Malloc, 9);
+    B_ExposeFunction(b, "free",  B_Free, 10);
+
+    B_JIT(b, src);
+    
+    /* Actually run the program */
+    x = B_Run(b, B_functionLookup(b, "main"));
+
+    B_FreeState(b);
+    return x;
+}
+
+#endif
+
 #ifndef _BLANG_BUILD_AS_LIBRARY
 
 int main(int argc, char* argv[]){
@@ -3239,14 +3432,27 @@ int main(int argc, char* argv[]){
         
         B_ExposeFunction(b, "malloc",  B_Malloc, 9);
         B_ExposeFunction(b, "free",  B_Free, 10);
-
+        B_ExposeFunction(b, "dbg_putnumb",  B_putnumb, 99);
         
         B_JIT(b, src);
         
         DBG_RUN(
-            printf("GLOBALS\n");
+            printf("Post Compile Global Dump:\n");
+            printf("%25s | %8s | %8s\n", "NAME", "TYPE", "VALUE");
             for(x = 0; x < b->globptr; x++){
-                printf("%s\n", b->globals[x].name);
+                if(b->globals[x].type == 0){
+                    printf("%25s | %8s | %8d\n", b->globals[x].name, "FUNCTION", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 1){
+                    printf("%25s | %8s | %8d\n", b->globals[x].name, "SYSCALL", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 2){
+                    printf("%25s | %8s | %8d\n", b->globals[x].name, "LABEL", b->globals[x].addr);
+                }
+                else{
+                    printf("%25s | %8d | %8d\n", b->globals[x].name, b->globals[x].type, b->globals[x].addr);
+                }
+                
             }
         );
 
