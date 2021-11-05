@@ -56,10 +56,10 @@
 #define BLANG_INDEX_TYPE int
 
 #ifdef _DEBUG
-#define BLANG_VERSION "Blaest Trunk v0.2_dev"
+#define BLANG_VERSION "Blaest v0.2_dev"
 #define DBG_RUN(n) n
 #else
-#define BLANG_VERSION "Blaest Trunk v0.2"
+#define BLANG_VERSION "Blaest v0.2"
 #define DBG_RUN(n)
 #endif
 
