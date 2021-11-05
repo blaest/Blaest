@@ -20,7 +20,7 @@ Currently Blæst supports
 
 * Defining and setting local variables
 
-* Defining global variables (but not setting just yet)
+* Defining and setting global variables 
 
 * Labels/gotos
 
@@ -32,9 +32,9 @@ Currently Blæst supports
 
 * Test conditions <, >, <=, >=
 
-### Planned
-
 * Else If/Else statements
+
+### Planned
 
 * Foreign Function Interface
 

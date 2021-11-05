@@ -1720,6 +1720,9 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                 for(vnptr = 0; varName[vnptr] != 0; vnptr++){
                     finalBuffer[(*fbptr)++] = varName[vnptr];
                 }
+                
+                free(varName);
+                
                 finalBuffer[(*fbptr)++] = 0;
                 (*position)++;
                 
@@ -2320,6 +2323,8 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                         bjs->finalBuffer[bjs->fbptr++] = 0;
                         bjs->position++;
                         
+                        free(doneName);
+                        
                         DBG_RUN(
                             printf("We are post if block\n");
                             printf("IFPTR: %d\n", ifPtr);
@@ -2721,6 +2726,8 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                  * so we need to reset this here */
                 bjs->macro = 0;
                 B_JITStageOne(bjs, include);
+                
+                fclose(include);
                 #else
                     _BLANG_LOAD_INCLUDE
                 #endif
@@ -2906,6 +2913,8 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
     
     /* Eventually move this to ResolveStringLiterals */
     free(state->strLiteralBuffer);
+    free(state->lineBuffer);
+    free(state);
 }
 
 /*
@@ -2946,9 +2955,16 @@ void
 B_FreeState(B_State* s)
 {
     free(s->memory);
-    /*for(; s->globptr > 1; s->globptr--){
-        free((void*)s->globals[s->globptr - 1].name);
-    }*/
+    free(s->memoryLeases);
+    
+    for(; s->globptr > 0; s->globptr--){
+        if(s->globals[s->globptr - 1].type != 1){
+            free((void*)s->globals[s->globptr - 1].name);
+        }
+        
+    }
+    
+    
     
     free(s->globals);
     free(s->mmap);
@@ -3488,25 +3504,25 @@ int main(int argc, char* argv[]){
         
         B_ExposeFunction(b, "malloc",  B_Malloc, 9);
         B_ExposeFunction(b, "free",  B_Free, 10);
-        B_ExposeFunction(b, "dbg_putnumb",  B_putnumb, 99);
         
         B_JIT(b, src);
+        fclose(src);
         
         DBG_RUN(
             printf("Post Compile Global Dump:\n");
-            printf("%25s | %8s | %8s\n", "NAME", "TYPE", "VALUE");
+            printf("%3s | %25s | %8s | %8s\n", "PTR", "NAME", "TYPE", "VALUE");
             for(x = 0; x < b->globptr; x++){
                 if(b->globals[x].type == 0){
-                    printf("%25s | %8s | %8d\n", b->globals[x].name, "GLOBAL", b->globals[x].addr);
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "GLOBAL", b->globals[x].addr);
                 }
                 else if(b->globals[x].type == 1){
-                    printf("%25s | %8s | %8d\n", b->globals[x].name, "SYSCALL", b->globals[x].addr);
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "SYSCALL", b->globals[x].addr);
                 }
                 else if(b->globals[x].type == 2){
-                    printf("%25s | %8s | %8d\n", b->globals[x].name, "LABEL", b->globals[x].addr);
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "LABEL", b->globals[x].addr);
                 }
                 else{
-                    printf("%25s | %8d | %8d\n", b->globals[x].name, b->globals[x].type, b->globals[x].addr);
+                    printf("%3d | %25s | %8d | %8d\n", x, b->globals[x].name, b->globals[x].type, b->globals[x].addr);
                 }
                 
             }
