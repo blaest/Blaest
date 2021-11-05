@@ -364,6 +364,7 @@ B_Run(B_State* s, int pc)
             break;
 
             /* Set accumulator from memory position */
+            /* NOTE: Maybe make y work by popping two values from stack */
             case 'y':{
                 BLANG_WORD_TYPE stackpos, mempos;
 
@@ -480,6 +481,27 @@ B_Run(B_State* s, int pc)
                 s->a = 0;
             }
             break;
+            
+            case 'w':{
+                BLANG_WORD_TYPE mempos, addative;
+                
+                addative = B_Pop(s);
+                mempos = s->memory[++s->pc];
+                
+                mempos += addative;
+
+                s->memory[mempos] = s->a;
+                
+                DBG_RUN(
+                    printf("Set memory position [%d] to %d\n", mempos, s->a);
+                );
+
+                s->a = 0;
+            }
+            break;
+            
+            /* TODO: MAke opcode that pops two values from stack, adds them
+             * together, and sets that mempos to a, for use in 2d arrays */
             
             /* Compare equal */
             case 'e':{
@@ -892,7 +914,13 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
             int ptr = 0;
         );
 
-        if(src[s->pc] == 'g' && ( (src[s->pc - 1] == 'c' ) || (src[s->pc - 1] == 'j' ) || (src[s->pc - 1] == 'A' ) || (src[s->pc - 1] == 'Y' ) || (src[s->pc - 1] == 'z' ) ) ){
+        if(src[s->pc] == 'g' && ( 
+        (src[s->pc - 1] == 'c' ) || 
+        (src[s->pc - 1] == 'j' ) || 
+        (src[s->pc - 1] == 'A' ) || 
+        (src[s->pc - 1] == 'Y' ) || 
+        (src[s->pc - 1] == 'z' ) || 
+        (src[s->pc - 1] == 'w' )) ){
             for(s->pc++; src[s->pc] != 0; s->pc++){
                 if(src[s->pc] < 33 || src[s->pc] > 127){
                     DBG_RUN(
@@ -1627,12 +1655,11 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                     goto setvarPostLoop;
                 }
             }
-            if(stackpos == -1){
-                printf("Couldnt find variable: %s\n", varName);
-                exit(1);
-            }
+            /* We have a global value statement... hopefully */
+            stackpos = -1;
+            
             setvarPostLoop:
-            free(varName);
+            
             
             if(isMathEqu){
                 
@@ -1665,12 +1692,40 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
             DBG_RUN(
                 printf("VALUE IS %s\n", value);
             );
+            
+            /* This needs to be here so we dont screw with the value */
+            if(stackpos == -1){
+                if(!isarray){
+                    finalBuffer[(*fbptr)++] = 'R';
+                    (*position)++;
+                    
+                    finalBuffer[(*fbptr)++] = 'O';
+                    (*position)++;
+                }
+            }
 
             jit_line_recur(value);
 
             free(value);
-
-            if(isarray){
+            
+            if(stackpos == -1){
+                /* If we dont have an array, we need to set the addative to 0 */
+                
+                finalBuffer[(*fbptr)++] = 'w';
+                (*position)++;
+                
+                finalBuffer[(*fbptr)++] = 'g';
+                (*position)++;
+                
+                for(vnptr = 0; varName[vnptr] != 0; vnptr++){
+                    finalBuffer[(*fbptr)++] = varName[vnptr];
+                }
+                finalBuffer[(*fbptr)++] = 0;
+                (*position)++;
+                
+                return;
+            }
+            else if(isarray){
                 finalBuffer[(*fbptr)++] = 's';
                 (*position)++;
             }
@@ -1689,6 +1744,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                 (*position)++;
             }
 
+            free(varName);
             finalBuffer[(*fbptr)++] = stackpos;
             (*position)++;
             
@@ -3441,7 +3497,7 @@ int main(int argc, char* argv[]){
             printf("%25s | %8s | %8s\n", "NAME", "TYPE", "VALUE");
             for(x = 0; x < b->globptr; x++){
                 if(b->globals[x].type == 0){
-                    printf("%25s | %8s | %8d\n", b->globals[x].name, "FUNCTION", b->globals[x].addr);
+                    printf("%25s | %8s | %8d\n", b->globals[x].name, "GLOBAL", b->globals[x].addr);
                 }
                 else if(b->globals[x].type == 1){
                     printf("%25s | %8s | %8d\n", b->globals[x].name, "SYSCALL", b->globals[x].addr);
