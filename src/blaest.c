@@ -85,8 +85,11 @@ typedef struct{
     
     struct global_t* globals;
     BLANG_WORD_TYPE globptr;
+    
+    char alive;
 
     BLANG_WORD_TYPE a;
+    BLANG_WORD_TYPE z;
     BLANG_WORD_TYPE bp;
     BLANG_WORD_TYPE sp;
     BLANG_WORD_TYPE pc;
@@ -318,20 +321,25 @@ void B_stringToWords(const char *s1, BLANG_WORD_TYPE *s2, int size)
  * Main runtime system 
  */
 
+void
+B_SetPC(B_State* s, int pc)
+{
+    s->pc = pc;
+}
+
 BLANG_WORD_TYPE 
 B_Run(B_State* s, int pc)
 {
-    /* A temporary register nobody else needs to know about 
-     * (Might be a good idea to keep this in the state) */
-    BLANG_WORD_TYPE z = 0;
+    s->alive = 1;
     
     /* TODO: Make this function single step instructions, so we can run
      * multiple blaest applications from a single thread, will really help with
      * legacy systems and embeded systems which maybe only have a single core 
      * or inefficient multithreading */
-
+    
+    #ifndef _BLANG_SINGLE_STEP
     for(s->pc = pc; s->pc < 10000; s->pc++){
-        
+    #endif
         DBG_RUN(
             printf("[INT] [LOAD AT %d ] - %x(%c)\n", s->pc, s->memory[s->pc], s->memory[s->pc]);
         );
@@ -766,6 +774,7 @@ B_Run(B_State* s, int pc)
                 DBG_RUN(
                     printf("HALT\n");
                 );
+                s->alive = 0;
                 return 0;
             }
             break;
@@ -784,6 +793,7 @@ B_Run(B_State* s, int pc)
                     DBG_RUN(
                         printf("HALT CATCH FIRE\n");
                     );
+                    s->alive = 0;
 
                     return s->a;
                 }
@@ -813,50 +823,50 @@ B_Run(B_State* s, int pc)
             
             /* Add to temp register from Acculumulator */
             case '+':{
-                z += s->a;
+                s->z += s->a;
             }
             break;
 
             /* Same as above, but opposite... you get what I mean */
             case '-':{
-                z -= s->a;
+                s->z -= s->a;
             }
             break;
             
             case '*':{
-                z *= s->a;
+                s->z *= s->a;
             }
             break;
             
             case '/':{
-                z /= s->a;
+                s->z /= s->a;
             }
             break;
             
             case '%':{
-                z %= s->a;
+                s->z %= s->a;
             }
             break;
             
             case '&':{
-                z &= s->a;
+                s->z &= s->a;
             }
             break;
             
             case '^':{
-                z ^= s->a;
+                s->z ^= s->a;
             }
             break;
             
             case '|':{
-                z |= s->a;
+                s->z |= s->a;
             }
             break;
 
             /* Set A to value of temp register, then reset the temp register */
             case '=':{
-                s->a = z;
-                z = 0;
+                s->a = s->z;
+                s->z = 0;
             }
             break;
            
@@ -867,8 +877,12 @@ B_Run(B_State* s, int pc)
                 );
             break;
         }
-
+    #ifndef _BLANG_SINGLE_STEP
     }
+    #else
+        s->pc++;
+    #endif
+    
     return -1;
 }
 
@@ -2926,9 +2940,12 @@ B_CreateState()
 {
     B_State* state = (B_State*)malloc(sizeof(B_State));
     state->a = 0;
+    state->z = 0;
     state->bp = 0;
     state->sp = 0;
     state->pc = 0;
+
+    state->alive = 1;
 
     state->memory = (BLANG_WORD_TYPE*)malloc( (BLANG_MEMORY_SIZE + BLANG_STACK_SIZE) * sizeof(BLANG_WORD_TYPE));
     state->mmap = (unsigned char*)malloc((BLANG_MEMORY_SIZE / BLANG_MMAP_LIMIT) * sizeof(unsigned char));
