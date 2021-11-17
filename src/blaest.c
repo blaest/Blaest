@@ -100,6 +100,7 @@ typedef struct global_t{
     int type;
     BLANG_WORD_TYPE addr;
     BLANG_WORD_TYPE (*function)(B_State* f);
+    char* ref;
 } global_t;
 
 typedef struct{
@@ -241,6 +242,18 @@ B_atoi(const char* s1){
         }
     }
     return ret;
+}
+
+char
+B_isNumber(const char* s1)
+{
+    int i;
+    for(i = 0; s1[i] != 0; i++){
+        if(s1[i] < '0' || s1[i] > '9'){
+            return 0;
+        }
+    }
+    return 1;
 }
 
 void
@@ -403,7 +416,7 @@ B_Run(B_State* s, int pc)
                 s->a = s->memory[mempos];
 
                 DBG_RUN(
-                    printf("Got value from mempos %d\n", s->memory[(int)mempos])
+                    printf("Got value from mempos (%d) %d\n", mempos, s->memory[(int)mempos])
                 );
 
             }
@@ -899,6 +912,7 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
     int nbptr = 0;
     int resptr = 0;
     int addr = 0;
+    BLANG_WORD_TYPE globstart = 0;
     global_t glob;
     int x;
     int memsize = 0;
@@ -928,18 +942,25 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
             int ptr = 0;
         );
 
-        if(src[s->pc] == 'g' && ( 
+        if(src[s->pc] == 'g' /*&& ( 
         (src[s->pc - 1] == 'c' ) || 
         (src[s->pc - 1] == 'j' ) || 
         (src[s->pc - 1] == 'A' ) || 
         (src[s->pc - 1] == 'Y' ) || 
         (src[s->pc - 1] == 'z' ) || 
-        (src[s->pc - 1] == 'w' )) ){
+        (src[s->pc - 1] == 'w' ))*/){
+            globstart = s->pc;
+            
             for(s->pc++; src[s->pc] != 0; s->pc++){
                 if(src[s->pc] < 33 || src[s->pc] > 127){
                     DBG_RUN(
                         printf("Fake global found\n");
                     );
+                    
+                    for(; globstart != s->pc; globstart++){
+                        s->memory[resptr++] = src[globstart];
+                    }
+                    s->memory[resptr++] = src[s->pc];
 
                     goto resolveGlobalsError;
                 }
@@ -988,6 +1009,17 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
                 s->memory[resptr - 1] = 'C';
                 s->memory[resptr++] = addr;
                 
+            }
+            else if(glob.type == 4){
+                for(x = 0; x < (int)s->globptr; x++){
+                    if(strcmp(glob.ref, s->globals[x].name) == 0){
+                        DBG_RUN(
+                            printf("Resolved ref to %d\n", s->globals[x].addr);
+                        );
+                        
+                        s->memory[resptr++] = s->globals[x].addr;
+                    }
+                }
             }
 
             resolveGlobalsError:
@@ -2639,20 +2671,42 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                             printf("NAME IS %s\n", nameBuffer);
                         );
                         lb++;
-                        value = B_atoi(bjs->lineBuffer + lb);
+                        
+                        /* Is this global a value? */
+                        if(B_isNumber(bjs->lineBuffer + lb)){
+                            /* Yes it is, so get that value */
+                            value = B_atoi(bjs->lineBuffer + lb);
+                            
+                            bjs->finalBuffer[bjs->fbptr++] = value;
+                            glob.type = 0;
+                            glob.addr = bjs->position;
+                            bjs->position++;
+                            
+                        }
+                        else{
+                            /* No it isnt, probably a reference to another
+                             * global */
+                             
+                            glob.ref = (char*)malloc(64 * sizeof(char));
+                            
+                            for(value = 0; bjs->lineBuffer[lb] != 0; value++, lb++){
+                                glob.ref[value] = bjs->lineBuffer[lb];
+                            }
+                            glob.ref[value] = 0;
+                            
+                            glob.type = 4;
+                        }
+                        
                         
                         DBG_RUN(
                             printf("VALUE IS %d\n", value);
                         );
                         
-                        glob.type = 0;
-                        glob.addr = bjs->position;
+                        
                         glob.function = NULL;
-
                         bjs->s->globals[bjs->s->globptr++] = glob;
                         
-                        bjs->finalBuffer[bjs->fbptr++] = value;
-                        bjs->position++;
+                        
                     }
 
                 }
@@ -3474,6 +3528,10 @@ BLANG_WORD_TYPE B_CompileAndRun
     
     B_ExposeFunction(b, "malloc",  B_Malloc, 9);
     B_ExposeFunction(b, "free",  B_Free, 10);
+   
+    #ifdef _DEBUG 
+    B_ExposeFunction(b, "dbg_putnumb",  B_putnumb, 99);
+    #endif
 
     B_JIT(b, src);
     
@@ -3521,6 +3579,10 @@ int main(int argc, char* argv[]){
         
         B_ExposeFunction(b, "malloc",  B_Malloc, 9);
         B_ExposeFunction(b, "free",  B_Free, 10);
+    
+        #ifdef _DEBUG 
+        B_ExposeFunction(b, "dbg_putnumb",  B_putnumb, 99);
+        #endif
         
         B_JIT(b, src);
         fclose(src);
@@ -3537,6 +3599,12 @@ int main(int argc, char* argv[]){
                 }
                 else if(b->globals[x].type == 2){
                     printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "LABEL", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 3){
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "STRING", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 4){
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "GLOBREF", b->globals[x].addr);
                 }
                 else{
                     printf("%3d | %25s | %8d | %8d\n", x, b->globals[x].name, b->globals[x].type, b->globals[x].addr);
