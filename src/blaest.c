@@ -130,6 +130,7 @@ typedef struct{
     
     int block;
     char macro;
+    char comment;
     char lastNL;
 } B_JITState;
 
@@ -635,7 +636,7 @@ B_Run(B_State* s, int pc)
              
             /* Memory allocate */
             case 'm':{
-                s->sp += s->memory[++s->pc] - 1;
+                s->sp += s->memory[++s->pc] ;
                 DBG_RUN(
                     printf("SP set to [%d]\n", s->sp);
                 );
@@ -1116,8 +1117,11 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
     
     DBG_RUN(
         printf("\n");
+        printf("\n");
         printf("[JIT] Compiling %s\n", lineBuffer);
         printf("[JIT] Position is %d\n", *position);
+        printf("\n");
+        printf("\n");
     );
 
     /* Check for line first characters */
@@ -1181,14 +1185,14 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                         (*position)++;
                         
                         presym = *sym;
-                        for(; *sym != presym + arrnum - 1; (*sym)++){
+                        for(; *sym != presym + arrnum + 1; (*sym)++){
                             symBuffer[*sym] = NULL;
                         }
                         
                         finalBuffer[(*fbptr)++] = 'm';
                         (*position)++;
 
-                        finalBuffer[(*fbptr)++] = arrnum;
+                        finalBuffer[(*fbptr)++] = arrnum + 1;
                         (*position)++;
 
                         free(arrbuffer);
@@ -1770,7 +1774,6 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                 free(varName);
                 
                 finalBuffer[(*fbptr)++] = 0;
-                (*position)++;
                 
                 return;
             }
@@ -1886,7 +1889,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
         return;
     }
     else{
-        int g, h, j, isnumber, isalgo, isvar, isPointer, isBorrow;
+        int g, h, j, isnumber, isalgo, isvar, isPointer, isBorrow, arrayBlock;
         BLANG_WORD_TYPE valint;
 
         g = 0;
@@ -1894,6 +1897,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
         isalgo = 0;
         isPointer = 0;
         isBorrow = 0;
+        arrayBlock = 0;
         
         if(lineBuffer[0] == '-'){
             isNegative = 1;
@@ -1905,14 +1909,24 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                 DBG_RUN(
                     printf("\tLineBufferValue %d\n", lineBuffer[g]);
                 );
+
+                if(lineBuffer[g] == '[' ){
+                    arrayBlock += 1;
+                }
+                else if(lineBuffer[g] == ']'){
+                    arrayBlock -= 1;
+                }
                 
                 /* Go through our known operators and see if we have a math 
                  * operator, if we do we can somewhat rest assured we have some
                  * sort of math equation */
                 for(j = 0; j < 8; j++){
                     if(lineBuffer[g] == B_Operators[j] && g >= 1){
-                        isalgo = 1;
-                        break;
+                        /* Make sure we aren't accidentally picking up the 
+                         * subscript of an array */
+                        if(arrayBlock == 0){
+                            isalgo = 1;
+                        }
                     }
                 }
                 
@@ -2158,6 +2172,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                         finalBuffer[(*fbptr)++] = 'O';
                         (*position)++;
 
+
                         finalBuffer[(*fbptr)++] = 'y';
                         (*position)++;
 
@@ -2302,13 +2317,38 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
     int globalStatementNumber = 0;
     int lineEnding = 0;
     
+    char lastCharComment = 0;
+    char commentType = 0;
    
     #ifdef _BLANG_USE_BUFFER
     while((c = src[bptr++]) != 0){
     #else
     while((c = getc(src)) != EOF){
     #endif
-        if(!bjs->macro && !inStringLiteral){
+        if(lastCharComment){
+            if(c == '/'){
+                bjs->comment = 1;
+                commentType = 1;
+            }
+            else if(c == '*'){
+                bjs->comment = 1;
+                commentType = 2;
+            }
+            else{
+                lastCharComment = 0;
+                goto notCommentEnd;
+            }
+                memset(bjs->lineBuffer, 0, 1024 * sizeof(char));
+                
+                bjs->lastNL = 1;
+                lineEnding = 0;
+                
+                x = 0;
+            
+        }
+        notCommentEnd:
+
+        if(!bjs->macro && !inStringLiteral && !bjs->comment){
             switch(c){
 
             /* We dont want to parse macros right now */
@@ -2724,6 +2764,11 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                 x = 0;
 
             break;
+            
+            case '/':
+                lastCharComment = 1;
+
+                /* fall through */
             default:
                 
                 if( c > 32){
@@ -2814,7 +2859,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                 int strptr;
                 int s = 0;
 
-                str = (char*)malloc(64 * sizeof(char));
+                str = (char*)malloc(2048 * sizeof(char));
                 sNum = malloc(50 * sizeof(char));
 
                 bjs->lineBuffer[x] = 0;
@@ -2878,6 +2923,27 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                 bjs->lineBuffer[x++] = c;
             }
         }
+        else if(bjs->comment) {
+            /* Comment is C++ style */
+            if(commentType == 1 && c == '\n'){
+                bjs->comment = 0;
+            }
+            /* Comment is C style */
+            else if(commentType == 2 && c == '*'){
+                commentType = 3;
+            }
+            /* We found the *, lets see if its done */
+            else if(commentType == 3){
+                if(c == '/'){
+                    /* It is done */
+                    bjs->comment = 0;
+                }
+                else{
+                    /* No, its just a stray * */
+                    commentType = 2;
+                }
+            }
+        }
         else{
             bjs->lineBuffer[x++] = c;
         }
@@ -2931,7 +2997,11 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
 {
     /* Setup our inner compiler variables */
     B_JITState* state = (B_JITState*)malloc(sizeof(B_JITState));
+    BLANG_WORD_TYPE x;
+    
     state->s = b;
+
+    
     
     state->lineBuffer = (char*)malloc(BLANG_LINEBUFFER_SIZE * sizeof(char));
     state->finalBuffer = (BLANG_WORD_TYPE*)malloc(BLANG_MEMORY_SIZE * sizeof(BLANG_WORD_TYPE));
@@ -2941,6 +3011,7 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
     
     state->lastNL = 1;
     state->macro = 0;
+    state->comment = 0;
     state->block = 0;
 
     /* We need to keep a separate log of position since some code may grow or 
@@ -2957,6 +3028,33 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
     
     /* Resolve and link */
     B_ResolveStringLiterals(state);  
+
+    DBG_RUN(
+            printf("Post Compile Global Dump:\n");
+            printf("%3s | %25s | %8s | %8s\n", "PTR", "NAME", "TYPE", "VALUE");
+            for(x = 0; x < b->globptr; x++){
+                if(b->globals[x].type == 0){
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "GLOBAL", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 1){
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "SYSCALL", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 2){
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "LABEL", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 3){
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "STRING", b->globals[x].addr);
+                }
+                else if(b->globals[x].type == 4){
+                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "GLOBREF", b->globals[x].addr);
+                }
+                else{
+                    printf("%3d | %25s | %8d | %8d\n", x, b->globals[x].name, b->globals[x].type, b->globals[x].addr);
+                }
+                
+            }
+        );
+
     B_ResolveGlobals(b, state->finalBuffer, state->fbptr);
     
     #else
@@ -3586,32 +3684,6 @@ int main(int argc, char* argv[]){
         
         B_JIT(b, src);
         fclose(src);
-        
-        DBG_RUN(
-            printf("Post Compile Global Dump:\n");
-            printf("%3s | %25s | %8s | %8s\n", "PTR", "NAME", "TYPE", "VALUE");
-            for(x = 0; x < b->globptr; x++){
-                if(b->globals[x].type == 0){
-                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "GLOBAL", b->globals[x].addr);
-                }
-                else if(b->globals[x].type == 1){
-                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "SYSCALL", b->globals[x].addr);
-                }
-                else if(b->globals[x].type == 2){
-                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "LABEL", b->globals[x].addr);
-                }
-                else if(b->globals[x].type == 3){
-                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "STRING", b->globals[x].addr);
-                }
-                else if(b->globals[x].type == 4){
-                    printf("%3d | %25s | %8s | %8d\n", x, b->globals[x].name, "GLOBREF", b->globals[x].addr);
-                }
-                else{
-                    printf("%3d | %25s | %8d | %8d\n", x, b->globals[x].name, b->globals[x].type, b->globals[x].addr);
-                }
-                
-            }
-        );
 
 
         /* Actually run the program */
