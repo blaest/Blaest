@@ -2997,7 +2997,9 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
 {
     /* Setup our inner compiler variables */
     B_JITState* state = (B_JITState*)malloc(sizeof(B_JITState));
+    #ifdef _DEBUG
     BLANG_WORD_TYPE x;
+    #endif
     
     state->s = b;
 
