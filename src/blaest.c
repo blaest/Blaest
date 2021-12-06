@@ -13,7 +13,7 @@
 #define BLANG_MEMORY_LEASES 256
 
 /* Size of the stack  (in words)*/
-#define BLANG_STACK_SIZE 4096
+#define BLANG_STACK_SIZE 10000
 
 /* Size of the line buffer */
 #define BLANG_LINEBUFFER_SIZE 1024
@@ -37,8 +37,9 @@
 
 /* Make sure this is the size of the bits on your computer, for example, 64-bit
  * uses 64-bit long, 32-bit uses 32-bit int, and so on. */
-#define BLANG_WORD_TYPE unsigned long
+#define BLANG_WORD_TYPE unsigned long  
 #define BLANG_WORD_TYPE_SIGNED signed long
+
 
 /******************************************************************************/
 
@@ -102,6 +103,11 @@ typedef struct global_t{
     BLANG_WORD_TYPE (*function)(B_State* f);
     char* ref;
 } global_t;
+
+typedef struct{
+    char* name;
+    int block;
+} symbol_t;
 
 typedef struct{
     const char* name;
@@ -1108,7 +1114,7 @@ static const char B_Operators[] = {'+', '-', '*', '/', '%', '&', '|', '^'};
 /* TODO: Eventaully turn this long list of arguements into a single struct that
  * gets passed around. (This will require a very lengthy rewrite)*/
 static void
-B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char** symBuffer, global_t* globals, BLANG_WORD_TYPE* globptr, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative)
+B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol_t* symBuffer, global_t* globals, BLANG_WORD_TYPE* globptr, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative)
 {
     /* Eventually these will need to be added to the struct once that gets 
      * implemented */
@@ -1170,7 +1176,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                         arrnum = B_atoi(arrbuffer);
 
                         stackpos = *sym;
-                        symBuffer[(*sym)++] = extbuffer;
+                        symBuffer[(*sym)].name = extbuffer;
+                        symBuffer[(*sym)++].block = *block;
                         
                         finalBuffer[(*fbptr)++] = 'G';
                         (*position)++;
@@ -1186,7 +1193,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                         
                         presym = *sym;
                         for(; *sym != presym + arrnum + 1; (*sym)++){
-                            symBuffer[*sym] = NULL;
+                            symBuffer[*sym].name = NULL;
+                            symBuffer[(*sym)].block = *block;
                         }
                         
                         finalBuffer[(*fbptr)++] = 'm';
@@ -1199,7 +1207,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                     }
                     else{
                         DBG_RUN(printf("NameBuffer: %s\n", nameBuffer));
-                        symBuffer[(*sym)++] = nameBuffer;
+                        symBuffer[(*sym)].name = nameBuffer;
+                        symBuffer[(*sym)++].block = *block;
                     }
                     
                     y = 0;
@@ -1555,7 +1564,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
         }
         free(leftSide);
     }
-    /* Make this faster */
+        /* Make this faster */
     else if(strhas(lineBuffer, '=')){
         char* arrayValue, *value;
         char* varName;
@@ -1691,16 +1700,16 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
             stackpos = -1;
 
             DBG_RUN(
-                for(vnptr = 0; vnptr < *sym; vnptr++){
-                    printf("SYM: %s\n", symBuffer[vnptr]);
+                for(vnptr = *sym - 1; vnptr >= 0; vnptr--){
+                    printf("SYM: %s\n", symBuffer[vnptr].name);
                 }
             );
             /* Reusing vnptr, for here it is a symbol pointer */
-            for(vnptr = 0; vnptr <= *sym; vnptr++){
-                if(symBuffer[vnptr] == NULL){
+            for(vnptr = *sym - 1; vnptr >= 0; vnptr--){
+                if(symBuffer[vnptr].name == NULL){
                     
                 }
-                else if(strcmp(varName, symBuffer[vnptr]) == 0){
+                else if(strcmp(varName, symBuffer[vnptr].name) == 0){
                     stackpos = vnptr;
                     goto setvarPostLoop;
                 }
@@ -2057,23 +2066,23 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
             lineBuffer++;
         }
         
-        for(g = 0; g <= *sym - 1; g++){
+        for(g = *sym - 1; g >= 0; g--){
             isvar = 0;
             
-            if(symBuffer[g] == NULL){
+            if(symBuffer[g].name == NULL){
             }
             else{
                 /* Go though and compare the strings */
-                for(h = 0; lineBuffer[h] != 0 && symBuffer[g][h] != 0; h++){             
+                for(h = 0; lineBuffer[h] != 0 && symBuffer[g].name[h] != 0; h++){             
                     /* If they equal, keep isvar as 1 */
-                    if((char)lineBuffer[h] == symBuffer[g][h]){
+                    if((char)lineBuffer[h] == symBuffer[g].name[h]){
                         isvar = 1;
                     }
                     /* Else its not, go back to beginning */
                     else{
 
                         DBG_RUN(
-                            printf("NOT FOUND: %s\n", symBuffer[g]);
+                            printf("NOT FOUND: %s\n", symBuffer[g].name);
                         );
 
                         isvar = 0;
@@ -2209,12 +2218,12 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
                     isvar = 0;
                 }
                 /* MAKE SURE 100% it is correct */
-                else if(lineBuffer[h] == symBuffer[g][h]){
+                else if(lineBuffer[h] == symBuffer[g].name[h]){
 
                     /* Varible found */
                     
-                        /*printf("!!!VARIABLE FOUND!!!\n");*/
-                    symBuffer[g][h] = 0;
+                    /*printf("!!!VARIABLE FOUND!!!  %s at %d\n", symBuffer[g].name, g);*/
+                    /*symBuffer[g].name[h] = 0;*/
                     lineBuffer[h] = 0;
                     
                     
@@ -2292,7 +2301,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, char**
 void 
 B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
 {
-    char** symBuffer = (char**)malloc(1024 * sizeof(char*));
+    symbol_t* symBuffer = (symbol_t*)malloc(1024 * sizeof(symbol_t));
 
     char c; 
     int x = 0;
@@ -2325,6 +2334,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
     #else
     while((c = getc(src)) != EOF){
     #endif
+    
         if(lastCharComment){
             if(c == '/'){
                 bjs->comment = 1;
@@ -2479,7 +2489,8 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                     
                 }
                 
-                                if(bjs->block >= 1){
+                if(bjs->block >= 1){
+                    int symptr = 0;
 
                     if(lab > 0){
                         for(; fnStartPos < bjs->fbptr; fnStartPos++){
@@ -2502,17 +2513,28 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                             }
                         }
                     }
+                    
+                    for(symptr = sym - 1; symptr >= 0; symptr--){
+                        
+                        if(symBuffer[symptr].block == bjs->block){
+                            DBG_RUN(
+                                printf("Removing symbol [%d] %s at block %d\n", symptr, symBuffer[symptr].name, symBuffer[symptr].block);
+                            );
+                            free(symBuffer[symptr].name);
+                            sym--;
+                        }
+                    }
                 }
                 
                 if(bjs->block == 1){    
                     /* Free all of our symbols */
                     for(sym--; sym >= 0; sym--){
-                        free(symBuffer[sym]);
+                        free(symBuffer[sym].name);
                     }
                     sym = 0;
 
                     /* This might not be needed, will test */
-                    memset(symBuffer, 0, 1024 * sizeof(char*));
+                    memset(symBuffer, 0, 1024 * sizeof(symbol_t));
                     
                     DBG_RUN(
                         printf("Removing symbols buffer\n");
@@ -2624,7 +2646,8 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                                 argbuf[j] = 0;
                                 if(strlen(argbuf) > 0){
                                     DBG_RUN(printf("Collected starting arguement %s\n", argbuf););
-                                    symBuffer[sym++] = argbuf;
+                                    symBuffer[sym].name = argbuf;
+                                    symBuffer[sym++].block = bjs->block;
                                     
                                     /* Set the arg value from the value pushed */
                                     bjs->finalBuffer[bjs->fbptr++] = 'a';
