@@ -949,8 +949,8 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
             int ptr = 0;
         );
 
-        if(src[s->pc] == 'g' /*&& ( 
-        (src[s->pc - 1] == 'c' ) || 
+        if(src[s->pc] == 'g' && ( 
+        (src[s->pc - 1] != 'A' ))/* || 
         (src[s->pc - 1] == 'j' ) || 
         (src[s->pc - 1] == 'A' ) || 
         (src[s->pc - 1] == 'Y' ) || 
@@ -2049,6 +2049,28 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
 
             return;
         }
+        else if(lineBuffer[0] == '\''){
+            DBG_RUN(
+                printf("Found character literal\n");
+            );
+
+            if(lineBuffer[1] == '\\'){
+                DBG_RUN(
+                    printf("Got escape sequence\n");
+                );
+            }
+            else{
+                DBG_RUN(
+                    printf("Value is %c or %d\n", lineBuffer[1], lineBuffer[1]);
+                );
+                finalBuffer[(*fbptr)++] = 'A';
+                (*position)++;
+
+                finalBuffer[(*fbptr)++] = lineBuffer[1];
+                (*position)++;
+            }
+            return;
+        }
         
         /* [Unintended consequence] The JIT will assume something is a variable
          * if it can't find anything else it should be, luckily it will be 
@@ -2313,6 +2335,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
     
     int stringLiteralStart = 0;
     int inStringLiteral = 0;
+    int inCharLiteral = 0;
     
 
     int fnStartPos = 0;
@@ -2358,12 +2381,18 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
         }
         notCommentEnd:
 
-        if(!bjs->macro && !inStringLiteral && !bjs->comment){
+        if(!bjs->macro && !inStringLiteral && !bjs->comment && !inCharLiteral){
             switch(c){
 
             /* We dont want to parse macros right now */
             case '#':
                 bjs->macro = 1;
+            break;
+
+            case '\'':
+                bjs->lastNL = 0; 
+                bjs->lineBuffer[x++] = c;
+                inCharLiteral = 1;
             break;
 
             case '}':
@@ -2805,6 +2834,14 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                 
             break;
             }
+        }
+        else if(inCharLiteral){
+            if(c == '\'' && bjs->lineBuffer[x - 1] != '\\'){
+                inCharLiteral = 0;
+            }
+
+            bjs->lastNL = 0;
+            bjs->lineBuffer[x++] = c;
         }
         else if(bjs->macro && c == '\n'){
 
