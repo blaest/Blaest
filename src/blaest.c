@@ -132,6 +132,9 @@ typedef struct{
     char** strLiteralBuffer;
     int strLiteralPtr;
     
+    BLANG_WORD_TYPE* globCallBuf;
+    BLANG_WORD_TYPE globCallPtr;
+    
     BLANG_WORD_TYPE fnNumber;
     
     int block;
@@ -913,12 +916,13 @@ B_Run(B_State* s, int pc)
 /* Go through the source and find globals, resolve them to the proper addresses
  * of their values (or if that address is their value) */
 void
-B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
+B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size, BLANG_WORD_TYPE* globBuf, BLANG_WORD_TYPE globSize)
 {
     char* nameBuffer = (char*)malloc(64 * sizeof(char));
     int nbptr = 0;
     int resptr = 0;
     int addr = 0;
+    BLANG_WORD_TYPE globPos;
     BLANG_WORD_TYPE globstart = 0;
     global_t glob;
     int x;
@@ -949,13 +953,17 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
             int ptr = 0;
         );
 
-        if(src[s->pc] == 'g' && ( 
-        (src[s->pc - 1] != 'A' ))/* || 
-        (src[s->pc - 1] == 'j' ) || 
-        (src[s->pc - 1] == 'A' ) || 
-        (src[s->pc - 1] == 'Y' ) || 
-        (src[s->pc - 1] == 'z' ) || 
-        (src[s->pc - 1] == 'w' ))*/){
+        if(src[s->pc] == 'g'){
+            
+            for(globPos = 0; globPos < globSize; globPos++){
+                if(s->pc == globBuf[globPos]){
+                    goto resolveGlobal;
+                }
+            }
+            goto notGlobal;
+            
+            resolveGlobal:
+            
             globstart = s->pc;
             
             for(s->pc++; src[s->pc] != 0; s->pc++){
@@ -1035,7 +1043,7 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size)
             nbptr = 0;
         }
         else{
-        
+            notGlobal:
             s->memory[resptr++] = src[s->pc];
         }
     }
@@ -1098,7 +1106,7 @@ B_ResolveStringLiterals(B_JITState* bjs)
  */
 
 /* This will make everything easier, trust me */
-#define jit_line_recur(x) B_PrivJITLine(s, x, finalBuffer, symBuffer, globals, globptr, block, position, fbptr, sym, fnNumber, ifTree, globalStatementNumber, ifPtr, lineEnding, isNegative)
+#define jit_line_recur(x) B_PrivJITLine(s, x, finalBuffer, symBuffer, globals, globptr, globCallbuf, globCallPtr, block, position, fbptr, sym, fnNumber, ifTree, globalStatementNumber, ifPtr, lineEnding, isNegative)
 
 #define BLANG_FROM_BLANK            0
 #define BLANG_FROM_IF_NO_BLOCK      1
@@ -1114,7 +1122,7 @@ static const char B_Operators[] = {'+', '-', '*', '/', '%', '&', '|', '^'};
 /* TODO: Eventaully turn this long list of arguements into a single struct that
  * gets passed around. (This will require a very lengthy rewrite)*/
 static void
-B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol_t* symBuffer, global_t* globals, BLANG_WORD_TYPE* globptr, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative)
+B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol_t* symBuffer, global_t* globals, BLANG_WORD_TYPE* globptr, BLANG_WORD_TYPE* globCallbuf, BLANG_WORD_TYPE* globCallPtr, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative)
 {
     /* Eventually these will need to be added to the struct once that gets 
      * implemented */
@@ -1233,6 +1241,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         finalBuffer[(*fbptr)++] = 'j';
         (*position)++;
 
+
+        globCallbuf[(*globCallPtr)++] = *fbptr;
         finalBuffer[(*fbptr)++] = 'g';
         
         DBG_RUN(
@@ -1369,6 +1379,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         finalBuffer[(*fbptr)++] = 'z';
         (*position)++;
 
+        globCallbuf[(*globCallPtr)++] = *fbptr;
         finalBuffer[(*fbptr)++] = 'g';
         finalBuffer[(*fbptr)++] = 's';
         
@@ -1773,6 +1784,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                 finalBuffer[(*fbptr)++] = 'w';
                 (*position)++;
                 
+                globCallbuf[(*globCallPtr)++] = *fbptr;
                 finalBuffer[(*fbptr)++] = 'g';
                 (*position)++;
                 
@@ -1876,6 +1888,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         finalBuffer[(*fbptr)++] = 'c';
         (*position)++;
 
+        globCallbuf[(*globCallPtr)++] = *fbptr;
         finalBuffer[(*fbptr)++] = 'g';
 
         i = 0;
@@ -2302,6 +2315,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
 
         finalBuffer[(*fbptr)++] = 'Y';
         (*position)++;
+        
+        globCallbuf[(*globCallPtr)++] = *fbptr;
         finalBuffer[(*fbptr)++] = 'g';
         (*position)++;
 
@@ -2441,6 +2456,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                         bjs->finalBuffer[bjs->fbptr++] = 'j';
                         bjs->position++;
                         
+                        bjs->globCallBuf[(bjs->globCallPtr)++] = bjs->fbptr;
                         bjs->finalBuffer[bjs->fbptr++] = 'g';
                         for(dnptr = 0; doneName[dnptr] != 0; dnptr++){
                             bjs->finalBuffer[bjs->fbptr++] = doneName[dnptr];
@@ -2803,7 +2819,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
 
                 }
                 else{
-                    B_PrivJITLine(bjs->s, bjs->lineBuffer, bjs->finalBuffer, symBuffer, bjs->s->globals, &bjs->s->globptr, &bjs->block, &bjs->position, &bjs->fbptr, &sym, &bjs->fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0);
+                    B_PrivJITLine(bjs->s, bjs->lineBuffer, bjs->finalBuffer, symBuffer, bjs->s->globals, &bjs->s->globptr, bjs->globCallBuf, &bjs->globCallPtr, &bjs->block, &bjs->position, &bjs->fbptr, &sym, &bjs->fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0);
                 }
                 
 
@@ -3070,7 +3086,9 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
     state->strLiteralBuffer = (char**)malloc(64 * sizeof(char*));
     state->fbptr = 0;
     state->strLiteralPtr = 0;
+    state->globCallBuf = (BLANG_WORD_TYPE*)malloc(256 * sizeof(BLANG_WORD_TYPE));
     
+    state->globCallPtr = 0;
     state->lastNL = 1;
     state->macro = 0;
     state->comment = 0;
@@ -3117,7 +3135,7 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
             }
         );
 
-    B_ResolveGlobals(b, state->finalBuffer, state->fbptr);
+    B_ResolveGlobals(b, state->finalBuffer, state->fbptr, state->globCallBuf, state->globCallPtr);
     
     #else
     
