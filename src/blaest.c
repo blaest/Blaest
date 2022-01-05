@@ -2946,7 +2946,6 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                     bjs->macro = 0;
                 }
             }
-            else if(strstart(
             
             bjs->macro = 0;
             memset(bjs->lineBuffer, 0, 1024 * sizeof(char));
