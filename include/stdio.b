@@ -1,4 +1,4 @@
-#include <string.b>
+#import <string.b>
 
 puts(str)
 {

@@ -135,6 +135,9 @@ typedef struct{
     BLANG_WORD_TYPE* globCallBuf;
     BLANG_WORD_TYPE globCallPtr;
     
+    char** imports;
+    BLANG_WORD_TYPE imptr;
+    
     BLANG_WORD_TYPE fnNumber;
     
     int block;
@@ -2871,12 +2874,13 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
             if(bjs->lineBuffer[0] == '!'){
                 /* This is a hashbang, do nothing with it */
             }
-            else if(strstart(bjs->lineBuffer, "include")){
+            else if(strstart(bjs->lineBuffer, "include") || strstart(bjs->lineBuffer, "import")){
                 #ifdef BLANG_BUFFER_IS_FILE
                 /* We have an include statement */
                 FILE *include;
                 char *fileNamebuf;
-                int iptr, fnb;
+                int iptr, fnb, canOpen;
+                BLANG_WORD_TYPE imp;
                 
                 fileNamebuf = malloc(512 * sizeof(char));
                 fnb = 0;
@@ -2900,27 +2904,49 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                 }
                 fileNamebuf[fnb] = 0;
                 
-                DBG_RUN(
-                    printf("Opening %s\n", fileNamebuf);
-                );
-                
-                include = fopen(fileNamebuf, "r");
-                if(include == NULL){
-                    printf("Failed to open file %s\n", fileNamebuf);
+                canOpen = 1;
+                /* We have a file import, so it has a header guard */
+                if(bjs->lineBuffer[1] == 'm'){
+                    for(imp = 0; imp < bjs->imptr; imp++){
+                        if(strcmp(fileNamebuf, bjs->imports[imp]) == 0){
+                            canOpen = 0;
+                        }
+                    }
                 }
                 
-                free(fileNamebuf);
-                
-                /* We don't to treat our included files as if they are macros, 
-                 * so we need to reset this here */
-                bjs->macro = 0;
-                B_JITStageOne(bjs, include);
-                
-                fclose(include);
-                #else
-                    _BLANG_LOAD_INCLUDE
-                #endif
+                if(canOpen){
+                    DBG_RUN(
+                        printf("Opening %s\n", fileNamebuf);
+                    );
+                    
+                    include = fopen(fileNamebuf, "r");
+                    if(include == NULL){
+                        printf("Failed to open file %s\n", fileNamebuf);
+                    }
+                    
+                    if(bjs->lineBuffer[1] == 'n'){
+                        free(fileNamebuf);
+                    }
+                    else{
+                        bjs->imports[bjs->imptr++] = fileNamebuf;
+                    }
+                    
+                    /* We don't to treat our included files as if they are macros, 
+                     * so we need to reset this here */
+                    bjs->macro = 0;
+                    B_JITStageOne(bjs, include);
+                    
+                    fclose(include);
+                    #else
+                        _BLANG_LOAD_INCLUDE
+                    #endif
+                }
+                else{
+                    free(fileNamebuf);
+                    bjs->macro = 0;
+                }
             }
+            else if(strstart(
             
             bjs->macro = 0;
             memset(bjs->lineBuffer, 0, 1024 * sizeof(char));
@@ -3087,6 +3113,9 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
     state->fbptr = 0;
     state->strLiteralPtr = 0;
     state->globCallBuf = (BLANG_WORD_TYPE*)malloc(256 * sizeof(BLANG_WORD_TYPE));
+    
+    state->imports = (char**)malloc(64 * sizeof(char*));
+    state->imptr = 0;
     
     state->globCallPtr = 0;
     state->lastNL = 1;

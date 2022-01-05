@@ -1,5 +1,10 @@
 #!/usr/bin/env blaest
-#include <stdio.b>
+#import <stdio.b>
+#import <string.b>
+
+/* strcmp.b
+ * One of the first real 'impressive' examples of Blaest.  And by that, I mean
+ * its one of the first that wasn't just setting values */
 
 main(){
     auto x, y, z;
