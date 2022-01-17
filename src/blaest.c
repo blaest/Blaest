@@ -3374,8 +3374,8 @@ B_Free(B_State* s)
     
 
     for(ml = 0; ml < BLANG_MEMORY_LEASES; ml++){
-        if(s->memoryLeases[ml].pos <= pos && s->memoryLeases[ml].pos + s->memoryLeases[ml].size >= pos){
-            DBG_RUN( printf("[MLEASE] Memory freed at %d (pos: %d, size: %d)\n", ml, s->memoryLeases[ml].pos, s->memoryLeases[ml].size) );
+        if(s->memoryLeases[ml].pos <= pos && s->memoryLeases[ml].pos + s->memoryLeases[ml].size > pos){
+            DBG_RUN(printf("[MLEASE] Memory freed at %d (pos: %d, size: %d)\n", pos, s->memoryLeases[ml].pos, s->memoryLeases[ml].size));
             
             for(x = s->memoryLeases[ml].pos; x < s->memoryLeases[ml].pos + s->memoryLeases[ml].size; x++){
                 s->mmap[x] = 0;

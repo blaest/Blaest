@@ -12,7 +12,7 @@ blaest: src/blaest.c
 install: blaest
 	cp blaest $(PREFIX)/bin
 	mkdir -p $(INCLUDE_PATH)
-	cp include/* $(INCLUDE_PATH)
+	cp -r include/* $(INCLUDE_PATH)
 
 .PHONY: uninstall
 uninstall:
