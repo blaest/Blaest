@@ -1490,6 +1490,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         rightSide[rsptr] = 0;
         
         jit_line_recur(leftSide);
+        free(leftSide);
         finalBuffer[(*fbptr)++] = 'z';
         (*position)++;
         
@@ -1517,6 +1518,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
 
         
         jit_line_recur(rightSide);
+        free(rightSide);
         
         /* Now update it */
         finalBuffer[jumpToEnd] = *position;
