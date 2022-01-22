@@ -1461,6 +1461,71 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         ifTree[*ifPtr].from = BLANG_FROM_ELSE_BLOCK;
         
     }
+    else if(strstr(lineBuffer, "&&") != NULL || strstr(lineBuffer, "||") != NULL){
+        int split, hitand, lsptr, rsptr;
+        char* leftSide;
+        char* rightSide;
+        BLANG_WORD_TYPE jumpToEnd;
+        
+        printf("AND AND\n");
+        
+        leftSide = malloc(64 * sizeof(char));
+        rightSide = malloc(64 * sizeof(char));
+        hitand = 0;
+        lsptr = 0;
+        rsptr = 0;
+        
+        for(split = 0; lineBuffer[split] != 0; split++){
+            if(((lineBuffer[split] == '&' && lineBuffer[split - 1] == '&') || (lineBuffer[split] == '|' && lineBuffer[split - 1] == '|')) && !hitand){
+                leftSide[lsptr - 1] = 0;
+                hitand = lineBuffer[split];
+            }
+            else{
+                if(hitand){
+                    rightSide[rsptr++] = lineBuffer[split];
+                }
+                else{
+                    leftSide[lsptr++] = lineBuffer[split];
+                }
+            }
+        }
+        
+        printf("LEFT SIDE: %s\n", leftSide);
+        printf("RIGHT SIDE: %s\n", rightSide);
+        
+        jit_line_recur(leftSide);
+        finalBuffer[(*fbptr)++] = 'z';
+        (*position)++;
+        
+        if(hitand == '|'){
+            /* If we are in OR mode and we have a nonzero in A, we need to jump
+             * to the end */
+            
+            finalBuffer[(*fbptr)++] = (*position) + 3;
+            (*position)++;
+             
+            finalBuffer[(*fbptr)++] = 'j';
+            (*position)++;
+            
+            jumpToEnd = *fbptr;
+            finalBuffer[(*fbptr)++] = 0;
+            (*position)++;
+        }
+        else{
+            /* If we are in AND mode, simply if we dont have a nonzero in A, we
+             * jump to the end because that will produce a A of 0 */
+            jumpToEnd = *fbptr;
+            finalBuffer[(*fbptr)++] = 0;
+            (*position)++;
+        }
+
+        
+        jit_line_recur(rightSide);
+        
+        /* Now update it */
+        finalBuffer[jumpToEnd] = *position;
+        
+    }
     else if(strhas(lineBuffer, '<') || strhas(lineBuffer, '>')){
         int lbptr, comparison;
         char* leftSide;
