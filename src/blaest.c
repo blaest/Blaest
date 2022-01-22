@@ -1466,9 +1466,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         char* leftSide;
         char* rightSide;
         BLANG_WORD_TYPE jumpToEnd;
-        
-        printf("AND AND\n");
-        
+
         leftSide = malloc(64 * sizeof(char));
         rightSide = malloc(64 * sizeof(char));
         hitand = 0;
@@ -1489,9 +1487,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                 }
             }
         }
-        
-        printf("LEFT SIDE: %s\n", leftSide);
-        printf("RIGHT SIDE: %s\n", rightSide);
+        rightSide[rsptr] = 0;
         
         jit_line_recur(leftSide);
         finalBuffer[(*fbptr)++] = 'z';
