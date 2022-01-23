@@ -3118,7 +3118,6 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
     );
     
     for(; ifPtr > -1; ifPtr--){
-        printf("IFPTR Value: %d\n", ifTree[ifPtr].statementNumber);
         if(ifTree[ifPtr].from == BLANG_SEARCH || ifTree[ifPtr].from == BLANG_FROM_ELSE_BLOCK){
             global_t zlabel;
             char* zlabName;
