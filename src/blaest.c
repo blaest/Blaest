@@ -1906,94 +1906,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             return;
         }
     }
-    else if(strhasp(lineBuffer) && *block > 0){
-        char* argbuf;
-        char *namebuf;
-        int p, j, i, argcount, inBrackets;
-
-        argbuf = (char*)malloc(64 * sizeof(char)); 
-        namebuf = (char*)malloc(64 * sizeof(char)); 
-        p = 0;
-        j = 0;
-        argcount = 0;
-
-        for(; lineBuffer[p] != '('; p++){
-            if(lineBuffer[p] > 32){
-                namebuf[j++] = (char)lineBuffer[p];
-            }
-        }
-        namebuf[j] = 0;
-        DBG_RUN(printf("NAMEBUF: %s\n", namebuf));
-
-        j = 0;
-
-        p++;
-
-        /* TODO: Refine this whole section */
-        for(inBrackets = 1; inBrackets; p++){
-            
-            if(lineBuffer[p] > 32 && (inBrackets >= 1 || (lineBuffer[p] != ',' || lineBuffer[p] != ')'))){
-                /* Have we finished collecting this arguement? */
-            
-                /* We check inBrackets here to make sure we are parsing the correct
-                 * arguements from the scope we want */
-                if(inBrackets == 1 && (lineBuffer[p] == ',' || lineBuffer[p] == ')')){
-                    argbuf[j] = 0;
-                    if(j > 0){
-                        DBG_RUN(
-                            printf("Collected arguement %s\n", argbuf);
-                        );
-                        
-                        argcount++;
-                        jit_line_recur(argbuf);
-                        finalBuffer[(*fbptr)++] = 'O';
-                        (*position)++;
-                    }
-                    memset(argbuf, 0, 64 * sizeof(char));
-                    j = 0;
-                }
-                else{
-                    argbuf[j++] = lineBuffer[p];
-                }
-            }
-            
-            if(lineBuffer[p] == '('){
-                inBrackets++;
-            }
-            else if(lineBuffer[p] == ')'){
-                inBrackets--;
-            }
-
-        }
-        free(argbuf);
-
-        finalBuffer[(*fbptr)++] = 'c';
-        (*position)++;
-
-        globCallbuf[(*globCallPtr)++] = *fbptr;
-        finalBuffer[(*fbptr)++] = 'g';
-
-        i = 0;
-        for(; lineBuffer[i] != '('; i++){
-            if(lineBuffer[i] > 32){
-                finalBuffer[(*fbptr)++] = lineBuffer[i];
-            }
-        }
-        finalBuffer[(*fbptr)++] = 0;
-
-        free(namebuf);
-
-        (*position)++; 
-        
-        for(; argcount > 0; argcount--){
-            finalBuffer[(*fbptr)++] = 'x';
-
-            (*position)++; 
-        }
-        return;
-    }
     else{
-        int g, h, j, isnumber, isalgo, isvar, isPointer, isBorrow, arrayBlock;
+        int g, h, j, isnumber, isalgo, isvar, isPointer, isBorrow, arrayBlock, hasp, infn;
         BLANG_WORD_TYPE valint;
 
         g = 0;
@@ -2002,6 +1916,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         isPointer = 0;
         isBorrow = 0;
         arrayBlock = 0;
+        hasp = 0;
+        infn = 0;
         
         if(lineBuffer[0] == '-'){
             isNegative = 1;
@@ -2013,7 +1929,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         }
         
         for(; lineBuffer[g] != 0; g++){
-            if(lineBuffer[g] < 48 || lineBuffer[g] > 57){
+            if(!infn && (lineBuffer[g] < 48 || lineBuffer[g] > 57)){
                 DBG_RUN(
                     printf("\tLineBufferValue %d\n", lineBuffer[g]);
                 );
@@ -2024,6 +1940,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                 else if(lineBuffer[g] == ']'){
                     arrayBlock -= 1;
                 }
+                
+                
                 
                 /* Go through our known operators and see if we have a math 
                  * operator, if we do we can somewhat rest assured we have some
@@ -2039,6 +1957,13 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                 }
                 
                 isnumber = 0;
+            }
+            if(lineBuffer[g] == '('){
+                hasp = 1;
+                infn += 1;
+            }
+            else if(lineBuffer[g] == ')'){
+                infn -= 1;
             }
         }
 
@@ -2171,6 +2096,95 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
 
                 finalBuffer[(*fbptr)++] = lineBuffer[1];
                 (*position)++;
+            }
+            return;
+        }
+        else if(hasp){
+            /* Our function call code */
+            char* argbuf;
+            char *namebuf;
+            int p, j, i, argcount, inBrackets;
+
+            argbuf = (char*)malloc(64 * sizeof(char)); 
+            namebuf = (char*)malloc(64 * sizeof(char)); 
+            p = 0;
+            j = 0;
+            argcount = 0;
+
+            for(; lineBuffer[p] != '('; p++){
+                if(lineBuffer[p] > 32){
+                    namebuf[j++] = (char)lineBuffer[p];
+                }
+            }
+            namebuf[j] = 0;
+            DBG_RUN(printf("NAMEBUF: %s\n", namebuf));
+
+            j = 0;
+
+            p++;
+
+            /* TODO: Refine this whole section */
+            for(inBrackets = 1; inBrackets; p++){
+                
+                if(lineBuffer[p] > 32 && (inBrackets >= 1 || (lineBuffer[p] != ',' || lineBuffer[p] != ')'))){
+                    /* Have we finished collecting this arguement? */
+                
+                    /* We check inBrackets here to make sure we are parsing the correct
+                     * arguements from the scope we want */
+                    if(inBrackets == 1 && (lineBuffer[p] == ',' || lineBuffer[p] == ')')){
+                        argbuf[j] = 0;
+                        if(j > 0){
+                            DBG_RUN(
+                                printf("Collected arguement %s\n", argbuf);
+                            );
+                            
+                            argcount++;
+                            jit_line_recur(argbuf);
+                            finalBuffer[(*fbptr)++] = 'O';
+                            (*position)++;
+                        }
+                        memset(argbuf, 0, 64 * sizeof(char));
+                        j = 0;
+                    }
+                    else{
+                        argbuf[j++] = lineBuffer[p];
+                    }
+                }
+                
+                if(lineBuffer[p] == '('){
+                    inBrackets++;
+                }
+                else if(lineBuffer[p] == ')'){
+                    inBrackets--;
+                }
+
+            }
+            free(argbuf);
+
+            finalBuffer[(*fbptr)++] = 'c';
+            (*position)++;
+
+            /* TODO: Eventaully allow local variables to be called as functions */
+
+            globCallbuf[(*globCallPtr)++] = *fbptr;
+            finalBuffer[(*fbptr)++] = 'g';
+
+            i = 0;
+            for(; lineBuffer[i] != '('; i++){
+                if(lineBuffer[i] > 32){
+                    finalBuffer[(*fbptr)++] = lineBuffer[i];
+                }
+            }
+            finalBuffer[(*fbptr)++] = 0;
+
+            free(namebuf);
+
+            (*position)++; 
+            
+            for(; argcount > 0; argcount--){
+                finalBuffer[(*fbptr)++] = 'x';
+
+                (*position)++; 
             }
             return;
         }
