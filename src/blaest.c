@@ -21,6 +21,10 @@
 /* How many words should each block of memory constitute? */
 #define BLANG_MMAP_LIMIT 10
 
+/* Currently networking only works in windows */
+#ifdef _WIN32
+#define _BLANG_USE_NETWORKING
+#endif
 
 /* Use the B Lang style of escapes (* instead of \, ex. '*n' instead of '\n') */
 /* #define BLANG_OLD_STYLE_ESCAPE */
@@ -69,6 +73,20 @@
 #else
     #define BLANG_BUFFER_TYPE FILE*
     #define BLANG_BUFFER_IS_FILE 1
+#endif
+
+#ifdef _BLANG_USE_NETWORKING
+    #ifdef _WIN32
+        #define WIN32_LEAN_AND_MEAN
+        #include <winsock2.h>
+        #include <ws2tcpip.h>
+        
+        
+        #pragma comment (lib, "Ws2_32.lib")
+        #pragma comment (lib, "Mswsock.lib")
+        
+        #define BLANG_USE_FAUXNIX
+    #endif
 #endif
 
 typedef struct{
@@ -3101,6 +3119,9 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                             case 'n':
                                 str[strptr++] = '\n';
                             break;
+                            case 'r':
+                                str[strptr++] = '\r';
+                            break;
                             case '"':
                                 str[strptr++] = '"';
                             break;
@@ -3620,6 +3641,13 @@ int FAUX_Read(int fd, char* buf, int size){
             return fread(buf, 1, size, filedesc.file);
         }
     }
+    else if(filedesc.type == FAUX_Socket){
+        #ifdef _BLANG_USE_NETWORKING
+            #ifdef _WIN32
+                return recv(filedesc.socket, buf, (int)size, 0 );
+            #endif
+        #endif
+    }
     return 0;
 }
 
@@ -3631,6 +3659,13 @@ int FAUX_Write(int fd, char* buf, int size){
     }
     else if(filedesc.type == 1){
         return fwrite(buf, 1, size, filedesc.file);
+    }
+    else if(filedesc.type == FAUX_Socket){
+        #ifdef _BLANG_USE_NETWORKING
+            #ifdef _WIN32
+                return send(filedesc.socket, buf, (int)size, 0 );
+            #endif
+        #endif
     }
     return 0;
 }
@@ -3650,8 +3685,21 @@ int FAUX_Open(char* name, char* flags){
 
 int FAUX_Close(int fd){
         
+    
+    if(fileDescriptors[fd].type == FAUX_File){
+        fclose(fileDescriptors[fd].file);
+    }
+    else if(fileDescriptors[fd].type = FAUX_Socket){
+        #ifdef _BLANG_USE_NETWORKING
+            #ifdef _WIN32
+                closesocket(fileDescriptors[fd].socket);
+                WSACleanup();
+            #endif
+        #endif
+    }
+    
     fileDescriptors[fd].type = FAUX_Nothing;
-    fclose(fileDescriptors[fd].file);
+    
     return 0;
 }
 
@@ -3812,6 +3860,203 @@ B_sysOPEN(B_State *s){
     return ret;
 }
 
+#ifdef _BLANG_USE_NETWORKING
+
+BLANG_WORD_TYPE
+B_sysDIAL(B_State *s){
+    BLANG_WORD_TYPE *rawaddress;
+    char *protocol, *ipaddr, *portbuf;
+    BLANG_WORD_TYPE state, x, protoptr, ipptr, portptr;
+    
+    rawaddress = B_GetArg(s, 1) + s->memory;
+    
+    protocol = malloc(16 * sizeof(char));
+    ipaddr = malloc(64 * sizeof(char));
+    portbuf = malloc(8 * sizeof(char));
+    
+    state = 0;
+    protoptr = 0;
+    ipptr = 0;
+    portptr = 0;
+    
+    for(x = 0; rawaddress[x] != 0; x++){
+        if(rawaddress[x] == '!'){
+            state += 1;
+        }
+        else if(state == 0){
+            protocol[protoptr++] = rawaddress[x];
+        }
+        else if(state == 1){
+            ipaddr[ipptr++] = rawaddress[x];
+        }
+        else{
+            portbuf[portptr++] = rawaddress[x];
+        }
+    }
+    protocol[protoptr] = 0;
+    ipaddr[ipptr] = 0;
+    portbuf[portptr] = 0;
+    
+    /* Winsock implementation */
+    #ifdef _WIN32
+        {
+            int index;
+            SOCKET sock = INVALID_SOCKET;
+            struct addrinfo *result = NULL,
+                *ptr = NULL,
+                hints;
+            memset(&hints, 0, sizeof(hints));
+            
+            hints.ai_family = AF_UNSPEC;
+            hints.ai_socktype = SOCK_STREAM;
+            hints.ai_protocol = IPPROTO_TCP;
+            
+            getaddrinfo(ipaddr, portbuf, &hints, &result);
+            
+            for(ptr=result; ptr != NULL ;ptr=ptr->ai_next) {
+                int iResult;
+                // Create a SOCKET for connecting to server
+                sock = socket(ptr->ai_family, ptr->ai_socktype, 
+                    ptr->ai_protocol);
+                if (sock == INVALID_SOCKET) {
+                    WSACleanup();
+                    return -1;
+                }
+
+                // Connect to server.
+                iResult = connect( sock, ptr->ai_addr, (int)ptr->ai_addrlen);
+                if (iResult == SOCKET_ERROR) {
+                    closesocket(sock);
+                    sock = INVALID_SOCKET;
+                    continue;
+                }
+                break;
+            }
+            freeaddrinfo(result);
+            
+            
+            if (sock == INVALID_SOCKET) {
+                WSACleanup();
+                return -1;
+            }
+                    
+            for(index = 0; index < (int)(FAUX_MaxDescriptors * sizeof(FAUX_FileDescriptor)); index++){
+                if(fileDescriptors[index].type == 0){
+                    fileDescriptors[index].type = FAUX_Socket;
+                    fileDescriptors[index].socket = sock;
+                    return index;
+                }
+            }
+        }
+    #endif
+    
+    return -1;
+}
+
+BLANG_WORD_TYPE
+B_sysLISTEN(B_State *s){
+    BLANG_WORD_TYPE *rawaddress, backlog;
+    char *protocol, *ipaddr, *portbuf;
+    BLANG_WORD_TYPE state, x, protoptr, ipptr, portptr, index;
+    
+    rawaddress = B_GetArg(s, 2) + s->memory;
+    backlog = B_GetArg(s, 1);
+    
+    protocol = malloc(16 * sizeof(char));
+    ipaddr = malloc(64 * sizeof(char));
+    portbuf = malloc(8 * sizeof(char));
+    
+    state = 0;
+    protoptr = 0;
+    ipptr = 0;
+    portptr = 0;
+    
+    for(x = 0; rawaddress[x] != 0; x++){
+        if(rawaddress[x] == '!'){
+            state += 1;
+        }
+        else if(state == 0){
+            protocol[protoptr++] = rawaddress[x];
+        }
+        else if(state == 1){
+            ipaddr[ipptr++] = rawaddress[x];
+        }
+        else{
+            portbuf[portptr++] = rawaddress[x];
+        }
+    }
+    protocol[protoptr] = 0;
+    ipaddr[ipptr] = 0;
+    portbuf[portptr] = 0;
+    
+    #ifdef _WIN32
+    {
+        SOCKET sock = INVALID_SOCKET;
+        struct addrinfo *result = NULL,
+            hints;
+        
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+        hints.ai_flags = AI_PASSIVE;
+
+        getaddrinfo(ipaddr, portbuf, &hints, &result);
+        
+        sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+        bind(sock, result->ai_addr, (int)result->ai_addrlen);
+        
+        x = listen(sock, backlog);
+        if (x == SOCKET_ERROR) {
+            printf("listen failed with error: %d\n", WSAGetLastError());
+            closesocket(sock);
+            WSACleanup();
+            return -1;
+        }
+        
+        for(index = 0; index < (int)(FAUX_MaxDescriptors * sizeof(FAUX_FileDescriptor)); index++){
+            if(fileDescriptors[index].type == 0){
+                fileDescriptors[index].type = FAUX_Socket;
+                fileDescriptors[index].socket = sock;
+                return index;
+            }
+        }
+    }
+    #endif
+    
+    return 0;
+}
+
+BLANG_WORD_TYPE
+B_sysACCEPT(B_State *s){
+    BLANG_WORD_TYPE fd, index;
+    fd = B_GetArg(s, 1);
+    #ifdef _WIN32
+    {
+        SOCKET sock;
+        sock = accept(fileDescriptors[fd].socket, NULL, NULL);
+            if (sock == INVALID_SOCKET) {
+                printf("accept failed with error: %d\n", WSAGetLastError());
+                closesocket(sock);
+                WSACleanup();
+                return 1;
+            }
+        
+        for(index = 0; index < (int)(FAUX_MaxDescriptors * sizeof(FAUX_FileDescriptor)); index++){
+            if(fileDescriptors[index].type == 0){
+                fileDescriptors[index].type = FAUX_Socket;
+                fileDescriptors[index].socket = sock;
+                return index;
+            }
+        }
+        
+        return -1;
+    }
+    #endif
+}
+
+#endif
+
 BLANG_WORD_TYPE
 B_sysCLOSE(B_State *s){
     BLANG_WORD_TYPE ret, fd;
@@ -3866,6 +4111,13 @@ int main(int argc, char* argv[]){
     FILE* src;
     BLANG_WORD_TYPE x;
     B_State* b;
+    
+    #ifdef _BLANG_USE_NETWORKING
+        #ifdef _WIN32
+                 WSADATA wsaData;
+                 WSAStartup(MAKEWORD(2,2), &wsaData);
+        #endif
+    #endif
         
     #ifdef BLANG_USE_FAUXNIX
         FAUX_Init();
@@ -3893,6 +4145,12 @@ int main(int argc, char* argv[]){
         B_ExposeFunction(b, "open",  B_sysOPEN, 2);
         B_ExposeFunction(b, "close",  B_sysCLOSE, 3);
         
+        #ifdef _BLANG_USE_NETWORKING
+        B_ExposeFunction(b, "dial",  B_sysDIAL, 4);
+        B_ExposeFunction(b, "listen",  B_sysLISTEN, 5);
+        B_ExposeFunction(b, "accept",  B_sysACCEPT, 6);
+        #endif
+
         B_ExposeFunction(b, "malloc",  B_Malloc, 9);
         B_ExposeFunction(b, "free",  B_Free, 10);
     
