@@ -26,6 +26,8 @@
 #define _BLANG_USE_NETWORKING
 #endif
 
+#define _BLANG_USE_NETWORKING
+
 /* Use the B Lang style of escapes (* instead of \, ex. '*n' instead of '\n') */
 /* #define BLANG_OLD_STYLE_ESCAPE */
 
@@ -86,8 +88,22 @@
         #pragma comment (lib, "Mswsock.lib")
         
         #define BLANG_USE_FAUXNIX
+    #else
+        #ifndef __USE_POSIX
+            /* These may or may not be needed to force the compiler to use 
+             * POSIX extensions */
+            #define _POSIX_C_SOURCE 200809L
+            #define __USE_POSIX
+            #define __USE_XOPEN2K
+        #endif
+        
+        #include <sys/types.h>
+        #include <sys/socket.h>
+        #include <netdb.h>
+        #include <stdlib.h>
     #endif
 #endif
+
 
 typedef struct{
     BLANG_WORD_TYPE pos;
@@ -2261,6 +2277,19 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                 if((lineBuffer[h] != 0  && lineBuffer[h] == '[') || isRecurredArray){
                     /* Array found */
                     
+                    /* In the future, completely rewrite this so that arrays are
+                     * read from right to left, they find the first set of 
+                     * brackets, and jit recur before that, then account for the
+                     * subscript
+                     * 
+                     * array[sub1][sub2]
+                     * |----------| -> recur
+                     * array[sub1]
+                     * => number
+                     * number[sub2] -> evaluate with sub2 now
+                     * answer
+                     */
+                    
                     char* arrayValue = (char*)malloc(64 * sizeof(char));
                     int arrayptr = 0;
                     
@@ -3915,7 +3944,7 @@ B_sysDIAL(B_State *s){
             
             for(ptr=result; ptr != NULL ;ptr=ptr->ai_next) {
                 int iResult;
-                // Create a SOCKET for connecting to server
+                /* Create a SOCKET for connecting to server */
                 sock = socket(ptr->ai_family, ptr->ai_socktype, 
                     ptr->ai_protocol);
                 if (sock == INVALID_SOCKET) {
@@ -3923,7 +3952,7 @@ B_sysDIAL(B_State *s){
                     return -1;
                 }
 
-                // Connect to server.
+                /* Connect to server. */
                 iResult = connect( sock, ptr->ai_addr, (int)ptr->ai_addrlen);
                 if (iResult == SOCKET_ERROR) {
                     closesocket(sock);
@@ -3948,6 +3977,44 @@ B_sysDIAL(B_State *s){
                 }
             }
         }
+    /* Berkley socket implementation */
+    /* Most of this is the same between BSD and Winsock, maybe merge the two at
+     * some point in the future and take care of the Winsock specific things */
+    #else
+        {
+            int sock;
+            struct addrinfo *result, *ptr, hints;
+            
+            memset(&hints, 0, sizeof(hints));
+            /* This seems to be more recently POSIX specific, so maybe make a
+             * fallback using gethostbyname(), despite it being deprecated */
+             
+             /* This would also remove the need for the funny defines in the
+              * networking include block, which probably break more things than
+              * they fix */
+            getaddrinfo(ipaddr, portbuf, &hints, &result);
+            
+            for(ptr=result; ptr != NULL ;ptr=ptr->ai_next) {
+                int iResult;
+                /* Create a SOCKET for connecting to server */
+                sock = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+                if (sock == -1) {
+                    return -1;
+                }
+
+                /* Connect to server. */
+                iResult = connect( sock, ptr->ai_addr, (int)ptr->ai_addrlen);
+                if (iResult != 0) {
+                    close(sock);
+                    sock = -1;
+                    continue;
+                }
+                break;
+            }
+            freeaddrinfo(result);
+            
+            return sock;
+        }
     #endif
     
     return -1;
@@ -3957,8 +4024,7 @@ BLANG_WORD_TYPE
 B_sysLISTEN(B_State *s){
     BLANG_WORD_TYPE *rawaddress, backlog;
     char *protocol, *ipaddr, *portbuf;
-    BLANG_WORD_TYPE state, x, protoptr, ipptr, portptr, index;
-    
+    BLANG_WORD_TYPE state, x, protoptr, ipptr, portptr;
     rawaddress = B_GetArg(s, 2) + s->memory;
     backlog = B_GetArg(s, 1);
     
@@ -3991,6 +4057,7 @@ B_sysLISTEN(B_State *s){
     
     #ifdef _WIN32
     {
+        BLANG_WORD_TYPE index;
         SOCKET sock = INVALID_SOCKET;
         struct addrinfo *result = NULL,
             hints;
@@ -4022,6 +4089,28 @@ B_sysLISTEN(B_State *s){
             }
         }
     }
+    #else
+        int sock = -1;
+        struct addrinfo *result = NULL,
+            hints;
+        
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+        hints.ai_flags = AI_PASSIVE;
+
+        getaddrinfo(ipaddr, portbuf, &hints, &result);
+        
+        sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+        bind(sock, result->ai_addr, (int)result->ai_addrlen);
+        
+        x = listen(sock, backlog);
+        if (x == (BLANG_WORD_TYPE)-1) {
+            close(x);
+            return -1;
+        }
+        return sock;
     #endif
     
     return 0;
@@ -4029,10 +4118,11 @@ B_sysLISTEN(B_State *s){
 
 BLANG_WORD_TYPE
 B_sysACCEPT(B_State *s){
-    BLANG_WORD_TYPE fd, index;
+    BLANG_WORD_TYPE fd;
     fd = B_GetArg(s, 1);
     #ifdef _WIN32
     {
+        BLANG_WORD_TYPE index;
         SOCKET sock;
         sock = accept(fileDescriptors[fd].socket, NULL, NULL);
             if (sock == INVALID_SOCKET) {
@@ -4051,6 +4141,17 @@ B_sysACCEPT(B_State *s){
         }
         
         return -1;
+    }
+    #else
+    {
+        int sock;
+        sock = accept(fd, NULL, NULL);
+        if(sock == -1){
+            close(sock);
+            return -1;
+        }
+        return sock;
+
     }
     #endif
 }
