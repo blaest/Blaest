@@ -1,5 +1,5 @@
-CC=c89
-CFLAGS=-std=c89 -o blaest 
+CC=gcc
+CFLAGS=-std=gnu90 -o blaest 
 CWARN=-Wall -Wextra -Wpedantic -Wno-format
 PREFIX=/usr/local
 INCLUDE_PATH=/usr/local/lib/blaest/include

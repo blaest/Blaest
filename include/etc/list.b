@@ -83,6 +83,39 @@ List_get(list, index){
 	return array[index];
 }
 
+List_set(list, value, index){
+    auto array;
+
+    array = list[List_Array];
+
+    if(index == list[List_Size]){
+        List_add(list, value);
+    }
+    else if(index > list[List_Size]){
+        return 0;
+    }
+
+    array[index] = value;
+    return value;
+}
+
+List_insert(list, value, index){
+    auto array, indx;
+
+    array = list[List_Array];
+
+    List_add(list, 0);
+    
+    indx = List_size(list) - 2;
+
+    while(indx >= index){
+        array[indx + 1] = array[indx];
+        indx -= 1;
+    }
+    
+    array[index] = value;
+}
+
 List_clear(list){
 	auto array;
 
