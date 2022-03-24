@@ -21,11 +21,8 @@
 /* How many words should each block of memory constitute? */
 #define BLANG_MMAP_LIMIT 10
 
-/* Currently networking only works in windows */
-#ifdef _WIN32
-#define _BLANG_USE_NETWORKING
-#endif
-
+/* Networking may cause issues on older systems, disable it by 
+ * commenting out this next line. */
 #define _BLANG_USE_NETWORKING
 
 /* Use the B Lang style of escapes (* instead of \, ex. '*n' instead of '\n') */
@@ -95,6 +92,11 @@
             #define _POSIX_C_SOURCE 200809L
             #define __USE_POSIX
             #define __USE_XOPEN2K
+            
+            /* These may no longer be needed, now that we compile with
+             * GNU90, although we should have a fallback to ANSI C89
+             * using the older way of resolving domain names (that was
+             * our issue) */
         #endif
         
         #include <sys/types.h>
@@ -1383,7 +1385,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         /* Go through and get the interior of the IF statement, since it is 
          * looking for the closing parenthesis, we need to keep track of the
          * level deep it goes so we can make it end on the right place */
-        for(ifptr++, inBrackets = 1, cptr = 0; inBrackets; ifptr++){
+        for(ifptr++, inBrackets = 1, cptr = 0;inBrackets; ifptr++){
             
             if(lineBuffer[ifptr] > 32){
                 if(lineBuffer[ifptr] == '('){
@@ -1397,6 +1399,10 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                 }
                 
                 cmpBuffer[cptr++] = lineBuffer[ifptr];
+            }
+            else if(lineBuffer[ifptr] == 0){
+                printf("Error while processing line '%s'\nReached end of line.  This is most likely caused by a bracket mismatch.", lineBuffer);
+                exit(1);
             }
             
         }
@@ -1709,6 +1715,10 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                     if(lineBuffer[lbptr > 32]){
                         arrayValue[aptr++] = lineBuffer[lbptr];
                         
+                    }
+                    else if(lineBuffer[lbptr] == 0){
+                        printf("Error while processing line '%s', reached end of line.  This is most likely caused by a bracket mismatch", lineBuffer);
+                        exit(1);
                     }
                 }
                 arrayValue[aptr] = 0;
@@ -3213,8 +3223,13 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
     
     DBG_RUN(
         printf("Resolving lost if statements\n");
+        printf("%d\n", ifPtr);
+        printf("%d\n", bjs);
     );
     
+    if(ifPtr == -1){
+        goto recovery;
+    }
     for(; ifPtr > -1; ifPtr--){
         if(ifTree[ifPtr].from == BLANG_SEARCH || ifTree[ifPtr].from == BLANG_FROM_ELSE_BLOCK){
             global_t zlabel;
@@ -3250,7 +3265,12 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
     
     free(labelBuffer);
 
-    
+recovery:
+
+    DBG_RUN(
+        printf("Done here\n");
+    );
+    return;
 }
 
 void
@@ -4090,6 +4110,7 @@ B_sysLISTEN(B_State *s){
         }
     }
     #else
+    {
         int sock = -1;
         struct addrinfo *result = NULL,
             hints;
@@ -4111,6 +4132,7 @@ B_sysLISTEN(B_State *s){
             return -1;
         }
         return sock;
+    }
     #endif
     
     return 0;

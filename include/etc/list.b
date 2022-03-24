@@ -65,8 +65,9 @@ List_remove(list, index){
 		array[index] = array[index + 1];
 		index += 1;
 	}
-
+    
 	list[List_Size] = size - 1;
+    array[index] = 0;
 
 	return elem;
 }
