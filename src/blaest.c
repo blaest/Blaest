@@ -305,6 +305,33 @@ B_isNumber(const char* s1)
     return 1;
 }
 
+#ifndef _BLANG_ESCAPE_CHAR
+    #ifdef BLANG_OLD_STYLE_ESCAPE
+        #define _BLANG_ESCAPE_CHAR '*'
+    #else
+        #define _BLANG_ESCAPE_CHAR '\\'
+    #endif
+#endif
+char
+B_parseEscape(char e){
+    switch(e){
+        case _BLANG_ESCAPE_CHAR:
+            return _BLANG_ESCAPE_CHAR;
+        case 'n':
+            return '\n';
+        case 'r':
+            return '\r';
+        case '"':
+            return '"';
+        case '\'':
+            return '\'';
+        default:
+            printf("ERROR: Unknown Escape sequence %c%c", _BLANG_ESCAPE_CHAR, e);
+            exit(1);
+        return 0;
+    }
+}
+
 void
 B_stripString(char* s1){
     int len = 0;
@@ -2121,28 +2148,6 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
 
             return;
         }
-        else if(lineBuffer[0] == '\''){
-            DBG_RUN(
-                printf("Found character literal\n");
-            );
-
-            if(lineBuffer[1] == '\\'){
-                DBG_RUN(
-                    printf("Got escape sequence\n");
-                );
-            }
-            else{
-                DBG_RUN(
-                    printf("Value is %c or %d\n", lineBuffer[1], lineBuffer[1]);
-                );
-                finalBuffer[(*fbptr)++] = 'A';
-                (*position)++;
-
-                finalBuffer[(*fbptr)++] = lineBuffer[1];
-                (*position)++;
-            }
-            return;
-        }
         else if(hasp){
             /* Our function call code */
             char* argbuf;
@@ -2570,15 +2575,14 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
         if(!bjs->macro && !inStringLiteral && !bjs->comment && !inCharLiteral){
             switch(c){
 
+            case '\'':
+                bjs->lastNL = 0; 
+                inCharLiteral = 1;
+            break;
+
             /* We dont want to parse macros right now */
             case '#':
                 bjs->macro = 1;
-            break;
-
-            case '\'':
-                bjs->lastNL = 0; 
-                bjs->lineBuffer[x++] = c;
-                inCharLiteral = 1;
             break;
 
             case '}':
@@ -3026,9 +3030,65 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
             if(c == '\'' && bjs->lineBuffer[x - 1] != '\\'){
                 inCharLiteral = 0;
             }
-
-            bjs->lastNL = 0;
-            bjs->lineBuffer[x++] = c;
+            else if(c == '\\'){
+                /* We have an escape */
+                
+                /* If inCharLiteral is equal to 2, we know the next char
+                 * is escaped */
+                inCharLiteral = 2;
+            }
+            else if(inCharLiteral == 1){
+                char* numbuf;
+                int nbindex;
+                
+                numbuf = malloc(16 * sizeof(char));
+                nbindex = 0;
+                
+                B_itoa(c, numbuf);
+                
+                bjs->lastNL = 0;
+                
+                for(nbindex = 0; numbuf[nbindex] != 0; nbindex++){
+                    bjs->lineBuffer[x++] = numbuf[nbindex];
+                }
+                
+                free(numbuf);
+                
+                /* If inCharLiteral is 3, we already parsed our character
+                 * and if we find a new one, we will throw an error */
+                inCharLiteral = 3;          
+            }
+            else if(inCharLiteral == 2){
+                /* Process escape, for our escape character should now
+                 * be in c */
+                char* numbuf;
+                int nbindex;
+                char esc;
+                
+                esc = B_parseEscape(c);
+                
+                numbuf = malloc(16 * sizeof(char));
+                nbindex = 0;
+                
+                B_itoa(esc, numbuf);
+                
+                bjs->lastNL = 0;
+                
+                for(nbindex = 0; numbuf[nbindex] != 0; nbindex++){
+                    bjs->lineBuffer[x++] = numbuf[nbindex];
+                }
+                
+                free(numbuf);
+                
+                /* If inCharLiteral is 3, we already parsed our character
+                 * and if we find a new one, we will throw an error */
+                inCharLiteral = 3;          
+            }
+            else if(inCharLiteral == 3){
+                /* We have more than 1 character */
+                printf("Error: character literal has multiple characters within\n");
+                exit(1);
+            }
         }
         else if(bjs->macro && c == '\n'){
 
@@ -3142,32 +3202,8 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                     /* I can't tell what to make as escape characters, so I've
                      * implemented both and can change them with macros. */
                     
-                    #ifndef _BLANG_ESCAPE_CHAR
-                        #ifdef BLANG_OLD_STYLE_ESCAPE
-                            #define _BLANG_ESCAPE_CHAR '*'
-                        #else
-                            #define _BLANG_ESCAPE_CHAR '\\'
-                        #endif
-                    #endif
-                    
                     if(bjs->lineBuffer[x] == _BLANG_ESCAPE_CHAR){
-                        switch(bjs->lineBuffer[++x]){
-                            case _BLANG_ESCAPE_CHAR:
-                                str[strptr++] = _BLANG_ESCAPE_CHAR;
-                            break;
-                            case 'n':
-                                str[strptr++] = '\n';
-                            break;
-                            case 'r':
-                                str[strptr++] = '\r';
-                            break;
-                            case '"':
-                                str[strptr++] = '"';
-                            break;
-                            default:
-                                printf("ERROR: Unknown Escape sequence %c%c", _BLANG_ESCAPE_CHAR, bjs->lineBuffer[x]);
-                            break;
-                        }
+                        str[strptr++] = B_parseEscape(bjs->lineBuffer[++x]);
                     }
                     else{
                         str[strptr++] = bjs->lineBuffer[x];
