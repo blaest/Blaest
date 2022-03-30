@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
 #ifdef __unix
     #include <unistd.h>
@@ -4229,6 +4230,41 @@ B_sysCLOSE(B_State *s){
     return ret;
 }
 
+BLANG_WORD_TYPE
+B_sysTIME(B_State *s)
+{
+    /* We need this here so GCC doesnt complain about s being unused here.
+     * It should do nothing to the actual execution since it should be optimized
+     * out */
+    s->a = 0;
+    return time(NULL);
+}
+
+BLANG_WORD_TYPE
+B_sysPEEK(B_State *s)
+{
+    BLANG_WORD_TYPE ret, mempos;
+    unsigned char* mem;
+    mem = (unsigned char*)s->memory;
+    
+    mempos = B_GetArg(s, 1);
+    ret = (BLANG_WORD_TYPE)mem[mempos];
+    return ret;
+}
+
+BLANG_WORD_TYPE
+B_sysPOKE(B_State *s)
+{
+    BLANG_WORD_TYPE mempos, value;
+    unsigned char* mem;
+    mem = (unsigned char*)s->memory;
+    
+    mempos = B_GetArg(s, 2);
+    value = B_GetArg(s, 1);
+    mem[mempos] = (unsigned char)value;
+    return 0;
+}
+
 #ifdef _BLANG_USE_BUFFER
 
 BLANG_WORD_TYPE B_CompileAndRun
@@ -4309,9 +4345,13 @@ int main(int argc, char* argv[]){
         B_ExposeFunction(b, "listen",  B_sysLISTEN, 5);
         B_ExposeFunction(b, "accept",  B_sysACCEPT, 6);
         #endif
+        
+        B_ExposeFunction(b, "time",  B_sysTIME, 7);
+        B_ExposeFunction(b, "peek",  B_sysPEEK, 8);
+        B_ExposeFunction(b, "pole",  B_sysPOKE, 9);
 
-        B_ExposeFunction(b, "malloc",  B_Malloc, 9);
-        B_ExposeFunction(b, "free",  B_Free, 10);
+        B_ExposeFunction(b, "malloc",  B_Malloc, 10);
+        B_ExposeFunction(b, "free",  B_Free, 11);
     
         #ifdef _DEBUG 
         B_ExposeFunction(b, "dbg_putnumb",  B_putnumb, 99);
