@@ -15,6 +15,8 @@
 /* Size of the stack  (in words)*/
 #define BLANG_STACK_SIZE 10000
 
+#define BLANG_FORK_STACK_SIZE 1000
+
 /* Size of the line buffer */
 #define BLANG_LINEBUFFER_SIZE 1024
 
@@ -43,7 +45,6 @@
 #define BLANG_WORD_TYPE unsigned long  
 #define BLANG_WORD_TYPE_SIGNED signed long
 
-
 /******************************************************************************/
 
 #include <stdio.h>
@@ -56,6 +57,10 @@
     #include <fcntl.h>
 #else
     #define BLANG_USE_FAUXNIX
+#endif
+
+#ifdef _BLANG_PTHREADS
+    #include <pthread.h>
 #endif
 
 #define BLANG_INDEX_TYPE int
@@ -107,6 +112,14 @@
     #endif
 #endif
 
+#ifdef _BLANG_USE_THREADS
+    int lo = 0;
+    #define B_lock() while(lo); lo = 1;
+    #define B_unlock() lo = 0;
+#else
+    #define B_lock(lo)
+    #define B_unlock(lo)
+#endif
 
 typedef struct{
     BLANG_WORD_TYPE pos;
@@ -186,6 +199,8 @@ typedef struct{
 extern void B_Push(B_State*, BLANG_WORD_TYPE);
 extern BLANG_WORD_TYPE B_Pop(B_State*);
 extern void B_itoa(BLANG_WORD_TYPE, char*);
+
+extern BLANG_WORD_TYPE B_Malloc(B_State*, BLANG_WORD_TYPE);
 
 /* Check if string 1 (s1) starts with string 2 (s2) or vice versa */
 /* TODO: replace this with strncmp unless we have no libc */
@@ -550,7 +565,9 @@ B_Run(B_State* s, int pc)
 
                 /* Im not entirely sure why, but not casting this WILL cause a 
                  * sigsegv (can C not index with unsigned long?)*/
+                B_lock();
                 s->stack[(int)stackpos] = s->a;
+                B_unlock();
                 
                 DBG_RUN(
                     printf("[INT] Stack %d (%d) [%d] set to %d\n", stackpos - s->bp, stackpos, stackpos + BLANG_MEMORY_SIZE, s->a)
@@ -586,7 +603,9 @@ B_Run(B_State* s, int pc)
                 mempos = s->stack[(int)stackpos];
                 mempos += addative;
 
+                B_lock();
                 s->memory[mempos] = s->a;
+                B_unlock();
                 
                 DBG_RUN(
                     printf("Set memory position [%d (+ %d)] to %d\n", mempos - addative, mempos, s->a);
@@ -604,7 +623,9 @@ B_Run(B_State* s, int pc)
                 
                 mempos += addative;
 
+                B_lock();
                 s->memory[mempos] = s->a;
+                B_unlock();
                 
                 DBG_RUN(
                     printf("Set memory position [%d] to %d\n", mempos, s->a);
@@ -1037,7 +1058,6 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size, BLANG_W
         );
 
         if(src[s->pc] == 'g'){
-            
             for(globPos = 0; globPos < globSize; globPos++){
                 if(s->pc == globBuf[globPos]){
                     goto resolveGlobal;
@@ -1077,11 +1097,12 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size, BLANG_W
 
             for(x = 0; x < (int)s->globptr; x++){
                 if(strcmp(nameBuffer, s->globals[x].name) == 0){
+                    BLANG_WORD_TYPE resv = s->globals[x].addr;
                     DBG_RUN(
-                        printf("Resolved to %d\n", s->globals[x].addr);
+                        printf("Resolved to %d\n", resv);
                     );
                     glob = s->globals[x];
-                    addr = s->globals[x].addr;
+                    addr = resv;
                     goto resolveGlobalsResolved;
                 }
                 
@@ -1117,6 +1138,16 @@ B_ResolveGlobals(B_State* s, BLANG_WORD_TYPE* src, BLANG_WORD_TYPE size, BLANG_W
                         
                         s->memory[resptr++] = s->globals[x].addr;
                     }
+                }
+            }
+            else if(glob.type == 5){
+                /* Function globals point to their location, which is +1 from
+                 * their address */
+                if(s->memory[resptr - 1] == 'c'){
+                    s->memory[resptr++] = addr + 1;
+                }
+                else{
+                    s->memory[resptr++] = addr;
                 }
             }
 
@@ -2857,6 +2888,8 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                         /* This needs to be here so all of our injected code gets 
                          * saved */
                         glob.addr = bjs->position;
+                        bjs->finalBuffer[bjs->fbptr++] = bjs->position + 1;
+                        bjs->position++;
                         
                         for(i++; bjs->lineBuffer[i-1] != ')'; i++){
                             if(bjs->lineBuffer[i] > 32 && bjs->lineBuffer[i] != ',' && bjs->lineBuffer[i] != ')'){
@@ -2903,7 +2936,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                         }
 
                         glob.name = nameBuffer;
-                        glob.type = 0;
+                        glob.type = 5;
                         
                         glob.function = NULL;
 
@@ -3445,6 +3478,46 @@ B_CreateState()
     return state;
 }
 
+#ifdef _BLANG_USE_THREADS
+
+B_State* 
+B_CreateForkedState(B_State* parent, BLANG_WORD_TYPE pc, BLANG_WORD_TYPE arg)
+{
+    B_State* state = (B_State*)malloc(sizeof(B_State));
+    state->a = 0;
+    state->z = 0;
+    state->bp = 0;
+    state->sp = 0;
+    state->pc = pc;
+
+    state->alive = 1;
+
+    state->memory = parent->memory;
+    state->mmap = parent->mmap;
+    
+    state->memoryLeases = parent->memoryLeases;
+    
+    state->memlptr = parent->memlptr;
+
+    state->globals = parent->globals;
+    state->globptr = parent->globptr;
+
+    state->stack = state->memory + B_Malloc(state, (BLANG_WORD_TYPE)BLANG_FORK_STACK_SIZE);
+    
+    B_lock();
+    
+    state->stack[0] = arg;
+    state->stack[1] = 0;
+    state->stack[2] = 0;
+    state->stack += 3;
+    
+    B_unlock();
+
+    return state;
+}
+
+#endif
+
 void 
 B_FreeState(B_State* s)
 {
@@ -3469,7 +3542,9 @@ B_FreeState(B_State* s)
 void 
 B_Push(B_State* s, BLANG_WORD_TYPE v)
 {
+    B_lock();
     s->stack[s->sp++] = v;
+    B_unlock();
 }
 BLANG_WORD_TYPE 
 B_Pop(B_State* s)
@@ -3534,9 +3609,8 @@ B_ExposeFunction (B_State *s, const char* name, BLANG_WORD_TYPE (*fn)(B_State* f
  * library component of libblaest, however for brevity it is included in the 
  * main JIT right now */
 BLANG_WORD_TYPE
-B_Malloc(B_State* s)
+B_Malloc(B_State* s, BLANG_WORD_TYPE actsize)
 {
-    BLANG_WORD_TYPE actsize = B_GetArg(s, 1);
     BLANG_WORD_TYPE size = 0;
     int x, y, pos, ml;
     memlease_t lease;
@@ -3582,11 +3656,17 @@ B_Malloc(B_State* s)
     }
     return pos * BLANG_MMAP_LIMIT;
 }
+BLANG_WORD_TYPE
+B_sysMALLOC(B_State* s)
+{
+    BLANG_WORD_TYPE actsize = B_GetArg(s, 1);
+    return B_Malloc(s, actsize);
+}
 
 BLANG_WORD_TYPE
-B_Free(B_State* s)
+B_Free(B_State* s, BLANG_WORD_TYPE mem)
 {
-    BLANG_WORD_TYPE pos = B_GetArg(s, 1) / BLANG_MMAP_LIMIT;
+    BLANG_WORD_TYPE pos = mem / BLANG_MMAP_LIMIT;
     BLANG_WORD_TYPE ml, x;
     
 
@@ -3602,6 +3682,13 @@ B_Free(B_State* s)
     }
     
     return 0;
+}
+
+BLANG_WORD_TYPE
+B_sysFREE(B_State* s)
+{
+    BLANG_WORD_TYPE mem = B_GetArg(s, 1);
+    return B_Free(s, mem);
 }
 
 BLANG_WORD_TYPE B_putnumb(B_State* s){
@@ -3629,7 +3716,7 @@ B_functionLookup(B_State* s, const char* name)
             DBG_RUN(
                 printf("Function looked up to %d\n", s->globals[x].addr);
             );
-            return s->globals[x].addr;
+            return s->globals[x].addr + 1;
         }
     }
     return 0;
@@ -4265,6 +4352,45 @@ B_sysPOKE(B_State *s)
     return 0;
 }
 
+#ifdef _BLANG_USE_THREADS
+
+#ifdef _BLANG_PTHREADS
+void*
+B_pthreadsCreateThread(void* state)
+{
+    B_State* s = (B_State*)state;
+    B_Run(s, s->pc);
+    pthread_exit(NULL);
+}
+
+BLANG_WORD_TYPE
+B_createThread(B_State* s)
+{
+    BLANG_WORD_TYPE x;
+    pthread_t th;
+    
+    x = pthread_create(&th, NULL, B_pthreadsCreateThread, (void *) s);
+
+    return x;
+}
+#endif
+
+BLANG_WORD_TYPE
+B_sysTHREAD(B_State *s)
+{
+    BLANG_WORD_TYPE arg = B_GetArg(s, 1);
+    BLANG_WORD_TYPE func = B_GetArg(s, 2);
+    B_State* fork = B_CreateForkedState(s, func, arg);
+    
+    if(B_createThread(fork)){
+        return -1;
+    }
+    
+    return 1;
+}
+
+#endif
+
 #ifdef _BLANG_USE_BUFFER
 
 BLANG_WORD_TYPE B_CompileAndRun
@@ -4350,9 +4476,13 @@ int main(int argc, char* argv[]){
         B_ExposeFunction(b, "peek",  B_sysPEEK, 8);
         B_ExposeFunction(b, "pole",  B_sysPOKE, 9);
 
-        B_ExposeFunction(b, "malloc",  B_Malloc, 10);
-        B_ExposeFunction(b, "free",  B_Free, 11);
-    
+        B_ExposeFunction(b, "malloc",  B_sysMALLOC, 10);
+        B_ExposeFunction(b, "free",  B_sysFREE, 11);
+        
+        #ifdef _BLANG_USE_THREADS
+        B_ExposeFunction(b, "thread",  B_sysTHREAD, 12);
+        #endif
+
         #ifdef _DEBUG 
         B_ExposeFunction(b, "dbg_putnumb",  B_putnumb, 99);
         #endif
