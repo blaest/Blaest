@@ -2304,11 +2304,14 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                         if((char)lineBuffer[h] == symBuffer[g].name[h]){
                             isvar = 1;
                         }
-                        
                         /* Since we are dealing with a function call, we need to
                          * make sure we are at the end of the symbol name, but 
                          * up to the first opening paren of the function call */
                         else if((lineBuffer[h] == '(' || lineBuffer[h] == '[') && symBuffer[g].name[h] == 0){
+                            DBG_RUN(
+                                printf("FOUND: %s, %d\n", symBuffer[g].name, isvar);
+                            );
+
                             break;
                         }
                         /* Else its not, go back to beginning */
@@ -2321,6 +2324,11 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                             break;
                         }
                     }
+                }
+                
+                /* Make sure to exit the loop when we find a variable */
+                if(isvar){
+                    break;
                 }
             }
             if(isvar){
