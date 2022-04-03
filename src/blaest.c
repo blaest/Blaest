@@ -806,6 +806,55 @@ B_Run(B_State* s, int pc)
                 s->pc--;
             }
             break;
+            
+            /* Call from A value */
+            case 'd':{
+                int gotopos;
+                /* Eventually maybe get the call address from A (this would
+                 * allow for local variables to be called as if they were
+                 * functions) */
+
+                DBG_RUN(
+                    printf("Current PC = %d\n", s->pc + sizeof(BLANG_WORD_TYPE));
+                    printf("[INT] Bp (%d) updated to Sp (%d)\n", s->bp, s->sp);
+                    printf("SP: %d, ", s->sp);
+                );
+                
+                /* Push our BP to the stack */
+                B_Push(s, s->bp);
+
+                DBG_RUN(
+                    printf("SP: %d, ", s->sp)
+                );
+
+                /* Do the same with our return address */
+                B_Push(s, s->pc + 1);
+
+                DBG_RUN(
+                    printf("SP: %d\n", s->sp)
+                );
+
+                /* Our stack pointer should point to the absolute top of the 
+                 * stack, so set the base pointer to that position */
+                s->bp = s->sp;
+
+                DBG_RUN(
+                    printf("Stacking arguements\n");
+                );
+
+                gotopos = s->a;
+                s->a = 0;
+                
+                DBG_RUN(
+                    printf("[INT] Going to %d\n", gotopos);
+                    printf("BP IS %d\n", s->bp);
+                );
+                
+                /* Now actually jump to the position */
+                s->pc = gotopos;
+                s->pc--;
+            }
+            break;
 
             /* Push */
             case 'O':{
@@ -2242,22 +2291,72 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             }
             free(argbuf);
 
-            finalBuffer[(*fbptr)++] = 'c';
-            (*position)++;
+            isvar = 0;
+            for(g = *sym - 1; g >= 0; g--){
+                isvar = 0;
+                
+                if(symBuffer[g].name != NULL){
+                    
+                    /* Go though and compare the strings */
+                    for(h = 0; 1; h++){
 
-            /* TODO: Eventaully allow local variables to be called as functions */
+                        /* If they equal, keep isvar as 1 */
+                        if((char)lineBuffer[h] == symBuffer[g].name[h]){
+                            isvar = 1;
+                        }
+                        
+                        /* Since we are dealing with a function call, we need to
+                         * make sure we are at the end of the symbol name, but 
+                         * up to the first opening paren of the function call */
+                        else if((lineBuffer[h] == '(' || lineBuffer[h] == '[') && symBuffer[g].name[h] == 0){
+                            break;
+                        }
+                        /* Else its not, go back to beginning */
+                        else{
+                            DBG_RUN(
+                                printf("NOT FOUND: %s\n", symBuffer[g].name);
+                            );
 
-            globCallbuf[(*globCallPtr)++] = *fbptr;
-            finalBuffer[(*fbptr)++] = 'g';
-
-            i = 0;
-            for(; lineBuffer[i] != '('; i++){
-                if(lineBuffer[i] > 32){
-                    finalBuffer[(*fbptr)++] = lineBuffer[i];
+                            isvar = 0;
+                            break;
+                        }
+                    }
                 }
             }
-            finalBuffer[(*fbptr)++] = 0;
+            if(isvar){
+                /* Replace the ( in the function call with a 0 so we can get
+                 * just the name of the call, this is so we can recur it back in
+                 * just incase its a variable */
+                
+                /* If its an array, increase it till we get to the end */
+                if(lineBuffer[h] == '['){
+                    for(;lineBuffer[h] != '('; h++);
+                }
+                
+                lineBuffer[h] = 0;
+                jit_line_recur(lineBuffer);
+                
+                finalBuffer[(*fbptr)++] = 'd';
+                
+                DBG_RUN(
+                    printf("Local function call: %s\n", lineBuffer);
+                );
+            }
+            else{
+                finalBuffer[(*fbptr)++] = 'c';
+                (*position)++;
+                
+                globCallbuf[(*globCallPtr)++] = *fbptr;
+                finalBuffer[(*fbptr)++] = 'g';
 
+                i = 0;
+                for(; lineBuffer[i] != '('; i++){
+                    if(lineBuffer[i] > 32){
+                        finalBuffer[(*fbptr)++] = lineBuffer[i];
+                    }
+                }
+                finalBuffer[(*fbptr)++] = 0;
+            }
             free(namebuf);
 
             (*position)++; 
