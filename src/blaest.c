@@ -134,6 +134,8 @@ typedef struct{
     BLANG_WORD_TYPE memlptr;
     BLANG_WORD_TYPE* memory;
     
+    BLANG_WORD_TYPE stackStart;
+    
     struct global_t* globals;
     BLANG_WORD_TYPE globptr;
     
@@ -515,10 +517,10 @@ B_Run(B_State* s, int pc)
             break;
             
             case 'G':{
-                s->a = BLANG_MEMORY_SIZE + s->memory[++s->pc];
+                s->a = s->stackStart + s->memory[++s->pc];
                 s->a += s->bp;
                 DBG_RUN(
-                    printf("[INT] GOT MEMORY VALUE %d\n", s->a);
+                    printf("[INT] GOT MEMORY VALUE %d, \n", s->a);
                 );
             }
             break;
@@ -570,7 +572,7 @@ B_Run(B_State* s, int pc)
                 B_unlock();
                 
                 DBG_RUN(
-                    printf("[INT] Stack %d (%d) [%d] set to %d\n", stackpos - s->bp, stackpos, stackpos + BLANG_MEMORY_SIZE, s->a)
+                    printf("[INT] Stack %d (%d) [%d] set to %d\n", stackpos - s->bp, stackpos, stackpos + s->stackStart, s->a)
                 );
 
                 }
@@ -2175,37 +2177,39 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                     
                         /* We have something starting out as negative */
                         if(g == 0){
-                            
+                            algbuf[h] = '-';
                         }
-                        /* Since the first value should be the starting value, 
-                         * we ALWAYS want that to be '+', otherwise I'd have to 
-                         * write more lines of code (which I don't want to do) 
-                         */
-                        if(lastSign == 0){
-                            lastSign = '+';
-                        }
+                        else{
+                            /* Since the first value should be the starting value, 
+                             * we ALWAYS want that to be '+', otherwise I'd have to 
+                             * write more lines of code (which I don't want to do) 
+                             */
+                            if(lastSign == 0){
+                                lastSign = '+';
+                            }
 
-                        DBG_RUN(
-                            printf("%c Found\n", lineBuffer[g]);
-                        );
-                        
-                        algbuf[h] = 0;
-                        
-                        jit_line_recur(algbuf);
-                        
-                        DBG_RUN(
-                            printf("[LOOP] WRITING SIGN %c while algbuf %s\n", lastSign, algbuf);
-                        );
-                        
-                        finalBuffer[(*fbptr)++] = lastSign;
-                        (*position)++;
-                        lastSign = lineBuffer[g];
-                        
-                        lastSignPos = g + 1;
-                        memset(algbuf, 0, 64 * sizeof(char));
-                        h = 0;
-                        break;
-                        continue;
+                            DBG_RUN(
+                                printf("%c Found\n", lineBuffer[g]);
+                            );
+                            
+                            algbuf[h] = 0;
+                            
+                            jit_line_recur(algbuf);
+                            
+                            DBG_RUN(
+                                printf("[LOOP] WRITING SIGN %c while algbuf %s\n", lastSign, algbuf);
+                            );
+                            
+                            finalBuffer[(*fbptr)++] = lastSign;
+                            (*position)++;
+                            lastSign = lineBuffer[g];
+                            
+                            lastSignPos = g + 1;
+                            memset(algbuf, 0, 64 * sizeof(char));
+                            h = 0;
+                            break;
+                            continue;
+                        }
                     }
                     else if(j == 7){
                         if(lineBuffer[g] > 32){
@@ -3561,6 +3565,7 @@ B_CreateState()
     state->bp = 0;
     state->sp = 0;
     state->pc = 0;
+    state->stackStart = BLANG_MEMORY_SIZE;
 
     state->alive = 1;
 
@@ -3608,8 +3613,10 @@ B_CreateForkedState(B_State* parent, BLANG_WORD_TYPE pc, BLANG_WORD_TYPE arg)
 
     state->globals = parent->globals;
     state->globptr = parent->globptr;
-
-    state->stack = state->memory + B_Malloc(state, (BLANG_WORD_TYPE)BLANG_FORK_STACK_SIZE);
+    
+    state->stackStart = B_Malloc(state, (BLANG_WORD_TYPE)BLANG_FORK_STACK_SIZE);
+    state->stack = state->memory + state->stackStart;
+    
     
     B_lock();
     
@@ -3619,6 +3626,8 @@ B_CreateForkedState(B_State* parent, BLANG_WORD_TYPE pc, BLANG_WORD_TYPE arg)
     state->stack += 3;
     
     B_unlock();
+    
+    
 
     return state;
 }
@@ -3802,6 +3811,13 @@ BLANG_WORD_TYPE B_putnumb(B_State* s){
     BLANG_WORD_TYPE arg = B_GetArg(s, 1);
     printf("Got arg %d\n", arg);
     printf("%d\n", arg);
+    return 0;
+}
+
+BLANG_WORD_TYPE B_dbgHalt(B_State* s){
+    BLANG_WORD_TYPE arg = B_GetArg(s, 1);
+    printf("Halting thread %d\n", arg);
+    while(1){}
     return 0;
 }
 
@@ -3995,7 +4011,6 @@ int FAUX_Close(int fd){
  * away, the difference should only be a few MS at the most.  Please use them
  * if you can, but otherwise don't bother.  Currently only implemented in Linux.
  */
-#define _BLANG_USE_SYSCALLS 1
 
 BLANG_WORD_TYPE
 B_sysREAD(B_State *s)
@@ -4041,6 +4056,7 @@ B_sysWRITE(B_State *s){
     
     fd     = B_GetArg(s, 3);
     
+    
     tmpbuf = (char*)malloc(size + 1);
     
     B_copyString(buff, tmpbuf, size);
@@ -4057,7 +4073,9 @@ B_sysWRITE(B_State *s){
             : "a"(1), "D"(fd), "S"(tmpbuf), "d"(size)
             : "cc", "rcx", "r11", "memory");
     #else
+        B_lock();
         ret = (BLANG_WORD_TYPE)write(fd, tmpbuf, size);
+        B_unlock();
     #endif
     
     free(tmpbuf);
@@ -4592,8 +4610,9 @@ int main(int argc, char* argv[]){
 
         #ifdef _DEBUG 
         B_ExposeFunction(b, "dbg_putnumb",  B_putnumb, 99);
-        #endif
         
+        #endif
+        B_ExposeFunction(b, "dbg_halt",  B_dbgHalt, 100);
         B_JIT(b, src);
         fclose(src);
 
