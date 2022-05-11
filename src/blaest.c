@@ -1280,7 +1280,9 @@ B_ResolveStringLiterals(B_JITState* bjs)
 #define BLANG_FROM_ELSE_BLOCK       4
 #define BLANG_FROM_WHILE_NO_BLOCK   5
 #define BLANG_FROM_WHILE_BLOCK      6
-#define BLANG_SEARCH                7
+#define BLANG_FROM_DO_BLOCK         7
+#define BLANG_SEARCH                8
+
 
 static const char B_Operators[] = {'+', '-', '*', '/', '%', '&', '|', '^'};
 
@@ -1452,7 +1454,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             (*position)++;
         }
     }
-    else if(strstart(lineBuffer, "if") || strstart(lineBuffer, "while") || strstart(lineBuffer, "else if")){
+    else if(strstart(lineBuffer, "if") || strstart(lineBuffer, "while") || strstart(lineBuffer, "else if") || strstart(lineBuffer, "do")){
         /* We have an if statement */
         int ifptr, cptr, startpos, inBrackets;
         char* cmpBuffer, *statementNumBuffer, *statementSubNumBuffer;
@@ -1479,6 +1481,13 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             
             (*ifPtr)--;
             
+        }
+        
+        /* We have a do loop */
+        if(lineBuffer[0] == 'd'){
+            ifTree[*ifPtr].from = BLANG_FROM_DO_BLOCK;
+            ifTree[*ifPtr].startpos = *position;
+            return;
         }
         
         cmpBuffer = (char*)malloc(64 * sizeof(char));
@@ -1525,6 +1534,10 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         jit_line_recur(cmpBuffer);
         free(cmpBuffer);
         
+        DBG_RUN(
+            printf("Done with inner sequence: %d\n", ifTree[*ifPtr].from);
+        );
+        
         /* Get our statement number in array form */
         statementNumBuffer = (char*)malloc(25 * sizeof(char));
         statementSubNumBuffer = (char*)malloc(25 * sizeof(char));
@@ -1533,6 +1546,34 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         
         if(lineBuffer[0] == 'e'){
             ifTree[*ifPtr].statementSubNumber++;
+        }
+        else if(ifTree[*ifPtr].from == BLANG_FROM_DO_BLOCK){
+            
+            DBG_RUN(
+                printf("Finishing up the Do/While statement\n");
+            );
+            
+            /* If we are exiting the loop, skip over the jump back to the start */
+            
+            finalBuffer[(*fbptr)++] = 'z';
+            (*position)++;
+
+            finalBuffer[(*fbptr)++] = (*position) + 3;
+            (*position)++;
+            
+            finalBuffer[(*fbptr)++] = 'j';
+            (*position)++;
+            
+            finalBuffer[(*fbptr)++] = ifTree[*ifPtr].startpos;
+            (*position)++;
+            
+            (*ifPtr)--;
+            
+            DBG_RUN(
+                printf("All done\n");
+            );
+            
+            return;
         }
         else{
             (*ifPtr)++;
@@ -3646,8 +3687,6 @@ B_FreeState(B_State* s)
         }
         
     }
-    
-    
     
     free(s->globals);
     free(s->mmap);

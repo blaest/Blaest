@@ -62,6 +62,11 @@ printf(str, fmt){
                 fmtindex += 1;
             }
 
+            else if(str[index] == 'd'){
+                printn(fmt[fmtindex], 10);
+                fmtindex += 1;
+            }
+
             index += 1;
         }
         else{
