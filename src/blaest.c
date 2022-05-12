@@ -1927,10 +1927,9 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
              
              value = (char*)malloc(64 * sizeof(char));
              
-             
-             
              for(vnptr = 0; lineBuffer[lbptr] != 0; lbptr++){
                 if(lineBuffer[lbptr] > 32){
+
                     value[vnptr++] = lineBuffer[lbptr];
                 }
             }
@@ -1965,9 +1964,11 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             (*position)++;
         }
         else{
-            int isMathEqu, j;
+            int isMathEqu, j, inParen, hasComma;
             
             isMathEqu = 0;
+            inParen = 0;
+            hasComma = 0;
             
             DBG_RUN(
                 printf("Not a boolean compare statement! \n");
@@ -2029,6 +2030,16 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             /* Reusing lbptr, reusing vnptr as well for value */
             for(; lineBuffer[lbptr] != 0; lbptr++){
                 if(lineBuffer[lbptr] > 32){
+                    if(lineBuffer[lbptr] == '('){
+                        inParen++;
+                    }
+                    else if(lineBuffer[lbptr] == ')'){
+                        inParen--;
+                    }
+                    else if(inParen == 0 && lineBuffer[lbptr] == ','){
+                        hasComma = 1;
+                    }
+                    
                     value[vnptr++] = lineBuffer[lbptr];
                 }
             }
@@ -2038,6 +2049,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             
             DBG_RUN(
                 printf("VALUE IS %s\n", value);
+                printf("Is new array set syntax? %d\n", hasComma);
             );
             
             /* This needs to be here so we dont screw with the value */
@@ -2051,6 +2063,61 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                 }
             }
 
+            /* We have the new array set syntax */
+            if(hasComma){
+                int comptr, running, arraypos;
+                
+                /* This holds a pointer to the current comma value we are processing */
+                char* argToProcess = value;
+                running = 1;
+                arraypos = 0;
+                
+                if(isarray){
+                    printf("%s\n", lineBuffer);
+                    printf("Error: Cannot use comma array setting on a non-array type\n");
+                    exit(1);
+                }
+                
+                /* This is bad form, do as I say, not as I do */
+                for(comptr = 0;running;comptr++){
+                    if(value[comptr] == ',' || value[comptr] == 0){
+                        if(value[comptr] == 0){
+                            running = 0;
+                        }
+                        
+                        finalBuffer[(*fbptr)++] = 'A';
+                        (*position)++;
+                        finalBuffer[(*fbptr)++] = arraypos;
+                        (*position)++;
+                        finalBuffer[(*fbptr)++] = 'O';
+                        (*position)++;
+                        
+                        arraypos++;
+                        
+                        
+                        /* We put a 0 in the place of the comma so that the string
+                         * terminates there.  Because we should be pointing to 
+                         * the start of the string we are processing in 
+                         * argToProcess, we are able to then say "this is a 
+                         * complete string" and pass that without having to do 
+                         * any more memory allocation */
+                        value[comptr] = 0;
+                        jit_line_recur(argToProcess);
+                        
+                        finalBuffer[(*fbptr)++] = 's';
+                        (*position)++;
+                        
+                        finalBuffer[(*fbptr)++] = stackpos;
+                        (*position)++;
+                        
+                        argToProcess = &value[comptr] + 1;
+
+                    }
+                }
+                return;
+            }
+            
+            /* Otherwise its just a standard assignment */
             jit_line_recur(value);
 
             free(value);
