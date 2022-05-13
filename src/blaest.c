@@ -2114,6 +2114,8 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
 
                     }
                 }
+                free(value);
+                free(varName);
                 return;
             }
             
@@ -3516,7 +3518,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
         printf("%d\n", bjs);
     );
     
-    if(ifPtr == -1){
+    if(ifPtr == -2){
         goto recovery;
     }
     for(; ifPtr > -1; ifPtr--){
@@ -3548,14 +3550,17 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
         }
     }
 
-    free(symBuffer);
-    
     free(ifTree);
-    
+    free(symBuffer);
     free(labelBuffer);
-
+    
+    /* Apparently at some point in the past, this was being run twice, so now 
+     * we need to make sure ifTree was properly disposed of by setting this value */
+    ifPtr = -2;
+    
 recovery:
 
+    
     DBG_RUN(
         printf("Done here\n");
     );
@@ -3657,6 +3662,8 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
     /* Eventually move this to ResolveStringLiterals */
     free(state->strLiteralBuffer);
     free(state->lineBuffer);
+    free(state->imports);
+    free(state->globCallBuf);
     free(state);
 }
 
