@@ -350,7 +350,7 @@ B_parseEscape(char e){
     }
 }
 
-void
+char*
 B_stripString(char* s1){
     int len = 0;
     
@@ -368,6 +368,7 @@ B_stripString(char* s1){
         len--;
     }
     
+    return s1;
 }
 
 static void 
@@ -1271,7 +1272,7 @@ B_ResolveStringLiterals(B_JITState* bjs)
  */
 
 /* This will make everything easier, trust me */
-#define jit_line_recur(x) B_PrivJITLine(s, x, finalBuffer, symBuffer, globals, globptr, globCallbuf, globCallPtr, block, position, fbptr, sym, fnNumber, ifTree, globalStatementNumber, ifPtr, lineEnding, isNegative, isNot)
+#define jit_line_recur(x) B_PrivJITLine(s, B_stripString(x), finalBuffer, symBuffer, globals, globptr, globCallbuf, globCallPtr, block, position, fbptr, sym, fnNumber, ifTree, globalStatementNumber, ifPtr, lineEnding, isNegative, isNot, isIncDec)
 
 #define BLANG_FROM_BLANK            0
 #define BLANG_FROM_IF_NO_BLOCK      1
@@ -1289,7 +1290,7 @@ static const char B_Operators[] = {'+', '-', '*', '/', '%', '&', '|', '^'};
 /* TODO: Eventaully turn this long list of arguements into a single struct that
  * gets passed around. (This will require a very lengthy rewrite)*/
 static void
-B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol_t* symBuffer, global_t* globals, BLANG_WORD_TYPE* globptr, BLANG_WORD_TYPE* globCallbuf, BLANG_WORD_TYPE* globCallPtr, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative, int isNot)
+B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol_t* symBuffer, global_t* globals, BLANG_WORD_TYPE* globptr, BLANG_WORD_TYPE* globCallbuf, BLANG_WORD_TYPE* globCallPtr, int* block, int* position, int* fbptr, int* sym, BLANG_WORD_TYPE* fnNumber, ifdat_t* ifTree, int* globalStatementNumber, int* ifPtr, int lineEnding, int isNegative, int isNot, int isIncDec)
 {
     /* Eventually these will need to be added to the struct once that gets 
      * implemented */
@@ -1305,12 +1306,10 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         printf("\n");
     );
 
-    /* Check for line first characters */
     if(lineBuffer[0] == 0){
         /* Quick and dirty exit if we have a null string */
         return;
     }
-    /* Eventually check for things like * or & here too */
     
     if(strstart(lineBuffer, "auto")){
         char* arrbuffer;
@@ -1506,20 +1505,20 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
          * level deep it goes so we can make it end on the right place */
         for(ifptr++, inBrackets = 1, cptr = 0;inBrackets; ifptr++){
             
-            if(lineBuffer[ifptr] > 32){
-                if(lineBuffer[ifptr] == '('){
-                    inBrackets++;
-                }
-                else if(lineBuffer[ifptr] == ')'){
-                    inBrackets--;
-                    if(!inBrackets){
-                        break;
-                    }
-                }
-                
-                cmpBuffer[cptr++] = lineBuffer[ifptr];
+            
+            if(lineBuffer[ifptr] == '('){
+                inBrackets++;
             }
-            else if(lineBuffer[ifptr] == 0){
+            else if(lineBuffer[ifptr] == ')'){
+                inBrackets--;
+                if(!inBrackets){
+                    break;
+                }
+            }
+            
+            cmpBuffer[cptr++] = lineBuffer[ifptr];
+        
+            if(lineBuffer[ifptr] == 0){
                 printf("Error while processing line '%s'\nReached end of line.  This is most likely caused by a bracket mismatch.", lineBuffer);
                 exit(1);
             }
@@ -1787,7 +1786,6 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         );
         
         /* Now we compile everything */
-        B_stripString(leftSide);
         jit_line_recur(leftSide);
         
         
@@ -1863,17 +1861,14 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
 
                 arrayValue = (char*)malloc(64 * sizeof(char));
                 for(lbptr++; lineBuffer[lbptr] != ']'; lbptr++){
-                    if(lineBuffer[lbptr > 32]){
-                        arrayValue[aptr++] = lineBuffer[lbptr];
-                        
-                    }
-                    else if(lineBuffer[lbptr] == 0){
+                    arrayValue[aptr++] = lineBuffer[lbptr];
+                    
+                    if(lineBuffer[lbptr] == 0){
                         printf("Error while processing line '%s', reached end of line.  This is most likely caused by a bracket mismatch", lineBuffer);
                         exit(1);
                     }
                 }
                 arrayValue[aptr] = 0;
-                B_stripString(arrayValue);
                 jit_line_recur(arrayValue);
                 
                 
@@ -1928,10 +1923,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
              value = (char*)malloc(64 * sizeof(char));
              
              for(vnptr = 0; lineBuffer[lbptr] != 0; lbptr++){
-                if(lineBuffer[lbptr] > 32){
-
-                    value[vnptr++] = lineBuffer[lbptr];
-                }
+                value[vnptr++] = lineBuffer[lbptr];
             }
             value[vnptr] = 0;
             
@@ -2029,19 +2021,18 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             
             /* Reusing lbptr, reusing vnptr as well for value */
             for(; lineBuffer[lbptr] != 0; lbptr++){
-                if(lineBuffer[lbptr] > 32){
-                    if(lineBuffer[lbptr] == '('){
-                        inParen++;
-                    }
-                    else if(lineBuffer[lbptr] == ')'){
-                        inParen--;
-                    }
-                    else if(inParen == 0 && lineBuffer[lbptr] == ','){
-                        hasComma = 1;
-                    }
-                    
-                    value[vnptr++] = lineBuffer[lbptr];
+                if(lineBuffer[lbptr] == '('){
+                    inParen++;
                 }
+                else if(lineBuffer[lbptr] == ')'){
+                    inParen--;
+                }
+                else if(inParen == 0 && lineBuffer[lbptr] == ','){
+                    hasComma = 1;
+                }
+                
+                value[vnptr++] = lineBuffer[lbptr];
+            
             }
             value[vnptr] = 0;
 
@@ -2183,7 +2174,56 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
         hasp = 0;
         infn = 0;
         
-        if(lineBuffer[0] == '-'){
+        if((lineBuffer[0] == lineBuffer[1] && (lineBuffer[0] == '+' || lineBuffer[0] == '-')) || isIncDec /* Also make sure to check for the back size ++ or -- */){
+            DBG_RUN(
+                printf("++ or --\n");
+                printf("Line: %s\n", lineBuffer);
+            );
+            
+            isIncDec = 0;
+            /* Basically we convert ++x into x+=1 and run it back through the JIT */
+            
+            /* The value is at the start */
+            if(lineBuffer[0] == '+' || lineBuffer[0] == '-'){
+                for(g = 0; lineBuffer[g] != 0; g++);
+                
+                lineBuffer[g++] = lineBuffer[0];
+                lineBuffer[g++] = '=';
+                lineBuffer[g++] = '1';
+                lineBuffer[g] = 0;
+                
+                lineBuffer += 2;
+                
+                jit_line_recur(lineBuffer);
+            }
+            /* The value is at the end */
+            else{
+                for(g = 0; lineBuffer[g] != '+' && lineBuffer[g] != '-'; g++);
+                
+                lineBuffer[g] = 0;
+                
+                jit_line_recur(lineBuffer);
+                finalBuffer[(*fbptr)++] = 'O';
+                (*position)++;
+                
+                lineBuffer[g] = lineBuffer[g + 1];
+                /* This is done to surpress a warning */
+                g++;
+                
+                lineBuffer[g++] = '=';
+                lineBuffer[g++] = '1';
+                lineBuffer[g] = 0;
+                jit_line_recur(lineBuffer);
+                
+                finalBuffer[(*fbptr)++] = 'o';
+                (*position)++;
+                
+            }
+            
+            
+            return;
+        }
+        else if(lineBuffer[0] == '-'){
             isNegative = 1;
             lineBuffer++;
         }
@@ -2289,6 +2329,11 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                         if(g == 0){
                             algbuf[h] = '-';
                         }
+                        else if(lineBuffer[g] == lineBuffer[g + 1]){
+                            algbuf[h++] = lineBuffer[g];
+                            g+= 1;
+                            isIncDec = 1;
+                        }
                         else{
                             /* Since the first value should be the starting value, 
                              * we ALWAYS want that to be '+', otherwise I'd have to 
@@ -2322,9 +2367,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                         }
                     }
                     else if(j == 7){
-                        if(lineBuffer[g] > 32){
-                            algbuf[h++] = lineBuffer[g];
-                        }
+                        algbuf[h++] = lineBuffer[g];
                     }
                 }
                 
@@ -2333,14 +2376,14 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             jit_line_recur(algbuf);
             free(algbuf);
 
-            
-            finalBuffer[(*fbptr)++] = lastSign;
-            (*position)++;
-            
-            
-            finalBuffer[(*fbptr)++] = '=';
-            (*position)++;
-
+            if(lastSign != 0){
+                finalBuffer[(*fbptr)++] = lastSign;
+                (*position)++;
+                
+                
+                finalBuffer[(*fbptr)++] = '=';
+                (*position)++;
+            }
             return;
         }
         else if(hasp){
@@ -2370,7 +2413,7 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
             /* TODO: Refine this whole section */
             for(inBrackets = 1; inBrackets; p++){
                 
-                if(lineBuffer[p] > 32 && (inBrackets >= 1 || (lineBuffer[p] != ',' || lineBuffer[p] != ')'))){
+                if(inBrackets >= 1 || (lineBuffer[p] != ',' || lineBuffer[p] != ')')){
                     /* Have we finished collecting this arguement? */
                 
                     /* We check inBrackets here to make sure we are parsing the correct
@@ -2413,7 +2456,6 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                     
                     /* Go though and compare the strings */
                     for(h = 0; 1; h++){
-
                         /* If they equal, keep isvar as 1 */
                         if((char)lineBuffer[h] == symBuffer[g].name[h]){
                             isvar = 1;
@@ -2574,9 +2616,9 @@ B_PrivJITLine(B_State* s, char* lineBuffer, BLANG_WORD_TYPE* finalBuffer, symbol
                     
                     /* Process the subscript for the array */
                     for(h++; lineBuffer[h] != ']' && lineBuffer[h] != 0; h++){
-                        if(lineBuffer[h] > 32){
-                            arrayValue[arrayptr++] = lineBuffer[h];
-                        }
+                        
+                        arrayValue[arrayptr++] = lineBuffer[h];
+                        
                     }
                     arrayValue[arrayptr] = 0;
                     
@@ -3249,7 +3291,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
 
                 }
                 else{
-                    B_PrivJITLine(bjs->s, bjs->lineBuffer, bjs->finalBuffer, symBuffer, bjs->s->globals, &bjs->s->globptr, bjs->globCallBuf, &bjs->globCallPtr, &bjs->block, &bjs->position, &bjs->fbptr, &sym, &bjs->fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0, 0);
+                    B_PrivJITLine(bjs->s, bjs->lineBuffer, bjs->finalBuffer, symBuffer, bjs->s->globals, &bjs->s->globptr, bjs->globCallBuf, &bjs->globCallPtr, &bjs->block, &bjs->position, &bjs->fbptr, &sym, &bjs->fnNumber, ifTree, &globalStatementNumber, &ifPtr, lineEnding, 0, 0, 0);
                 }
                 
 
