@@ -190,10 +190,15 @@ typedef struct{
     char** imports;
     BLANG_WORD_TYPE imptr;
     
+    char** defines;
+    char** defValues;
+    BLANG_WORD_TYPE defptr;
+    
     BLANG_WORD_TYPE fnNumber;
     
     int block;
     char macro;
+    char preDefine;
     char comment;
     char lastNL;
 } B_JITState;
@@ -2843,7 +2848,6 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
     #else
     while((c = getc(src)) != EOF){
     #endif
-    
         if(lastCharComment){
             if(c == '/'){
                 bjs->comment = 1;
@@ -2867,7 +2871,7 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
         }
         notCommentEnd:
 
-        if(!bjs->macro && !inStringLiteral && !bjs->comment && !inCharLiteral){
+        if(!bjs->macro && !inStringLiteral && !bjs->comment && !inCharLiteral && !bjs->preDefine){
             switch(c){
 
             case '\'':
@@ -2879,6 +2883,14 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
             case '#':
                 bjs->macro = 1;
             break;
+            
+            #ifdef _BLANG_USE_DEFINES
+            case '$':
+                printf("WOAH\n");
+                bjs->preDefine = 1;
+                bjs->lineBuffer[x++] = c;
+            break;
+            #endif
 
             case '}':
                 
@@ -3387,6 +3399,59 @@ B_JITStageOne(B_JITState* bjs, BLANG_BUFFER_TYPE src)
                 exit(1);
             }
         }
+        #ifdef _BLANG_USE_DEFINES
+        else if(bjs->preDefine){
+            /* We are processing a character that is not allowed for the define,
+             * so we can assume we are outside of the define */
+            if( !(c >= '0' && c <= '9') && !(c >= 'A' && c <= 'Z') && !(c == '_') && !(c >= 'a' && c <= 'z') ){
+                char* defnName;
+                BLANG_WORD_TYPE defNamePtr, resolveName, g;
+                
+                bjs->lineBuffer[x] = 0;
+                
+                /* Return the pointer in lineBuffer (x) to the start of the $ */
+                for(g = 0; bjs->lineBuffer[g] != '$'; g++){
+                    
+                }
+                
+                defnName = bjs->lineBuffer + g + 1;
+                
+                printf("DEFN: %s\n", bjs->lineBuffer + g + 1);
+                printf("Stop at %c", c);
+                
+                resolveName = 0;
+                
+                for(defNamePtr = 0; defNamePtr < bjs->defptr; defNamePtr++){
+                    printf("Comapring: [%s] [%s]\n", bjs->defines[defNamePtr], defnName);
+                    if(strcmp(defnName, bjs->defines[defNamePtr]) == 0){
+                        printf("Match\n");
+                        resolveName = 1;
+                        break;
+                    }
+                }
+                
+                if(resolveName){
+                    BLANG_WORD_TYPE nameptr;
+                    char* value = bjs->defValues[defNamePtr];
+                    printf("Value: %s\n", value);
+                    x = g;
+                    
+                    for(nameptr = 0; value[nameptr] != 0; nameptr++){
+                        bjs->lineBuffer[x++] = value[nameptr];
+                    }
+                }
+                else{
+                    bjs->lineBuffer[x] = c;
+                }
+                
+                bjs->preDefine = 0;
+                goto notCommentEnd;
+            }
+            else{
+                bjs->lineBuffer[x++] = c;
+            }
+        }
+        #endif
         else if(bjs->macro && c == '\n'){
 
             bjs->lineBuffer[x] = 0;
@@ -3609,6 +3674,17 @@ recovery:
     return;
 }
 
+#ifdef _BLANG_USE_DEFINES
+/* Maybe replace this with a macro at some point */
+void
+B_JITDefine(B_JITState* state, char* name, char* value)
+{
+    state->defines[state->defptr] = name;
+    state->defValues[state->defptr] = value;
+    state->defptr++;
+}
+#endif
+
 void
 B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
 {
@@ -3632,11 +3708,27 @@ B_JIT(B_State* b, BLANG_BUFFER_TYPE src)
     state->imports = (char**)malloc(64 * sizeof(char*));
     state->imptr = 0;
     
+    #ifdef _BLANG_USE_DEFINES
+    state->defines      = (char**)malloc(64 * sizeof(char*));
+    state->defValues    = (char**)malloc(64 * sizeof(char*));
+    state->defptr = 0;
+    #endif
+    
     state->globCallPtr = 0;
     state->lastNL = 1;
     state->macro = 0;
+    state->preDefine = 0;
     state->comment = 0;
     state->block = 0;
+    
+    #ifdef _BLANG_USE_DEFINES
+    /* The define system is broken because the JIT is not run OVER the text that is inserted, which
+     * means things like strings are not properly acconted for, we may need to run
+     * this before JIT */
+    
+    B_JITDefine(state, "JIT", "1");
+    B_JITDefine(state, "BLAEST_VERSION", "\"" BLANG_VERSION "\"");
+    #endif
 
     /* We need to keep a separate log of position since some code may grow or 
      * shirnk, such as global definitons, we need to keep those out of the 
@@ -4754,7 +4846,7 @@ int main(int argc, char* argv[]){
         
         B_ExposeFunction(b, "time",  B_sysTIME, 7);
         B_ExposeFunction(b, "peek",  B_sysPEEK, 8);
-        B_ExposeFunction(b, "pole",  B_sysPOKE, 9);
+        B_ExposeFunction(b, "poke",  B_sysPOKE, 9);
 
         B_ExposeFunction(b, "malloc",  B_sysMALLOC, 10);
         B_ExposeFunction(b, "free",  B_sysFREE, 11);
