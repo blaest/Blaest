@@ -1,3 +1,10 @@
+
+# Blæst is moving in a different direction
+
+After years of sitting dorment, Blæst is moving in a different direction. One which abandons this codebase in favor of a new, much better made one. More information at https://bravotic.com/blaest/. Thanks for the memories!
+
+The original README follows:
+
 # Blæst
 
 ### What?
